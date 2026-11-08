@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.local/
+__pycache__/
+*.pyc
+helper/build/
+helper/dist/
+*.spec
+.env*
+playwright-report/
+test-results/
+private/
+*.log

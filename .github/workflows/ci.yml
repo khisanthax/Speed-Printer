@@ -1,0 +1,39 @@
+name: Test and package
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-test-results
+          path: test-results/
+  windows-helper:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m unittest discover -s helper -p "test_*.py" -v
+      - run: pip install -r helper/requirements-build.txt
+      - run: python -m PyInstaller --onefile --name SpeedPrinterHelper --distpath helper/dist --workpath helper/build helper/server.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SpeedPrinterHelper-Windows
+          path: helper/dist/SpeedPrinterHelper.exe
