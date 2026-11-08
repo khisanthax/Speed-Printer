@@ -9,7 +9,7 @@ from server import State, LocalServer, handler_for, moon_read
 class SecurityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.state=State(argparse.Namespace(orca='missing',origin=['http://127.0.0.1:5173']))
+        cls.state=State(argparse.Namespace(orca='missing',origin=['http://127.0.0.1:5173']),test_mode=True)
         cls.server=LocalServer(('127.0.0.1',0),handler_for(cls.state))
         threading.Thread(target=cls.server.serve_forever,daemon=True).start()
     @classmethod

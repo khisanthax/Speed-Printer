@@ -1,6 +1,7 @@
 import "./style.css";
 import "./layout.css";
 import { Helper } from "./api";
+import { bundleFor, sourceStatus, type Library, type Printer } from "./library";
 import { compareCohort } from "./lab";
 import {
   changed,
@@ -28,6 +29,13 @@ const escape = (s: unknown) =>
       ]!,
   );
 const helper = new Helper();
+let library: Library | undefined;
+let restoredWorkspace = false;
+let refreshBusy = false;
+const rememberedPicks = new Map<
+  string,
+  { process: string; filament: string }
+>();
 let connected = false,
   model = "",
   modelName = "No common model selected",
@@ -154,6 +162,30 @@ function requireHelper() {
 }
 function profileInfo(i: number) {
   const b = i === 2 ? tuned : bundles[i];
+  if (i < 2 && library?.printers?.length) {
+    const p = library.printers.find((p) => p.id === b.machine.__sp_id);
+    const available = (kind: "process" | "filament") =>
+      (p?.[kind] || []).filter((c) => {
+        if (kind !== "filament") return true;
+        const material = library!.profiles.find((q) => q.__sp_id === c.id)!;
+        const prints = material.compatible_prints;
+        return (
+          !Array.isArray(prints) ||
+          !prints.length ||
+          prints.includes(b.process.name)
+        );
+      });
+    const choices = (kind: "process" | "filament") =>
+      `<label>${kind === "process" ? "Process" : "Filament"}<select data-preset="${i}:${kind}" aria-label="${i === 0 ? "A" : "B"} ${kind}"><option value="">Select ${kind}</option>${!available(kind).some((c) => c.id === b[kind].__sp_id) && b[kind].__sp_id ? `<option selected value="${escape(b[kind].__sp_id)}">${escape(b[kind].name)} · snapshot / source missing or incompatible</option>` : ""}${available(
+        kind,
+      )
+        .map(
+          (c) =>
+            `<option value="${c.id}" ${c.id === b[kind].__sp_id ? "selected" : ""}>${escape(c.name)} · ${escape(c.source)}${c.compatibility !== "matched" ? " · " + escape(c.compatibility) : ""}</option>`,
+        )
+        .join("")}</select></label>`;
+    return `<section class="profile section"><div class="printer-shot ${b.machine.name.toLowerCase().includes("sv08") ? "sv08" : ""}" role="img" aria-label="Printer reference image"></div><div class="profile-info curated"><label>Printer<select data-printer="${i}" aria-label="${i === 0 ? "A" : "B"} printer"><option value="">Select printer</option>${!p && b.machine.__sp_id ? `<option selected value="${escape(b.machine.__sp_id)}">${escape(b.machine.name)} · retained snapshot</option>` : ""}${library.printers.map((p) => `<option value="${p.id}" ${p.id === b.machine.__sp_id ? "selected" : ""}>${escape(p.name)} · ${p.source === "User" ? "User" : "Enabled system"}${p.current ? " · Current" : p.remembered ? " · Remembered" : ""}</option>`).join("")}</select></label>${choices("process")}${choices("filament")}<small class="source-warning">${escape(sourceStatus(b, library))}</small><button class="small" data-import="${i}">Import / Advanced</button></div></section>`;
+  }
   return `<section class="profile section"><div class="printer-shot ${b.machine.name.toLowerCase().includes("sv08") ? "sv08" : ""}" role="img" aria-label="Approved ${b.machine.name.toLowerCase().includes("sv08") ? "SV08" : "Mercury One"} reference image"></div><div class="profile-info">${i === 2 ? `<label for="modify">Profile to change</label><select id="modify"><option value="0" ${selected === 0 ? "selected" : ""}>${escape(bundles[0].machine.name)}</option><option value="1" ${selected === 1 ? "selected" : ""}>${escape(bundles[1].machine.name)}</option></select><span class="target">◎ Target: ${escape(bundles[1 - selected].machine.name)}</span>` : `<h2>${escape(b.machine.name)}</h2><span class="chip">${isDemo[i] ? "CoreXY · DEMO" : "Imported profile"}</span><dl><dt>Nozzle</dt><dd>${escape(b.machine.nozzle_diameter || "Not provided")} mm</dd><dt>Process</dt><dd>${escape(b.process.name)}</dd><dt>Filament</dt><dd>${escape(b.filament.name)}</dd></dl><button class="small" data-import="${i}">Import profiles</button>`}</div></section>`;
 }
 function rows(i: number) {
@@ -197,6 +229,53 @@ function renderCompare() {
         `<article class="column col-${i}"><div class="column-heading"><span>${i === 2 ? "☷" : "♙"}</span><div><h2>${["A — Current Printer", "B — Target Printer", "C — Live Tuning"][i]}</h2>${i === 2 ? `<small>Tune ${escape(bundles[selected].machine.name)} to match ${escape(bundles[1 - selected].machine.name)}</small>` : ""}</div></div>${profileInfo(i)}<section class="settings section"><div class="section-title"><h2><span>⚙</span> ${i === 2 ? "Live Adjustment Controls" : "Profile Settings"}</h2>${i === 2 ? '<button id="analyze" class="small">ϟ Analyze impact</button>' : `<span class="chip">${escape(bundles[i].process.layer_height || "—")} mm</span>`}</div><div class="settings-banner">ϟ ${i === 2 ? "Scroll linked across columns (synced scroll)" : "Speed-Affecting Settings (OrcaSlicer)"}<small>${i === 2 ? "Values require re-slicing" : "ⓘ Scroll linked across columns"}</small></div><div class="settings-scroll">${rows(i)}</div><div class="settings-foot">${i === 2 ? "Acceleration 0: firmware controlled where supported." : "Highlighted rows differ between profiles."}</div></section><section class="summary section" id="summary-${i}">${summary(i)}</section></article>`,
     )
     .join("");
+  document.querySelectorAll<HTMLSelectElement>("[data-printer]").forEach(
+    (el) =>
+      (el.onchange = () => {
+        const i = Number(el.dataset.printer);
+        const printer = library!.printers.find((p) => p.id === el.value);
+        if (!printer) return;
+        const bundle = bundleFor(
+          library!,
+          printer,
+          rememberedPicks.get(printer.id) || printer.selected,
+        );
+        if (bundle) useBundle(i, bundle);
+        else {
+          const machine = library!.profiles.find(
+            (p) => p.__sp_id === printer.id,
+          )!;
+          bundles[i] = {
+            machine: structuredClone(machine),
+            process: { name: "Select saved process", type: "process" },
+            filament: { name: "Select saved filament", type: "filament" },
+          };
+          isDemo[i] = true;
+          summaries[i] = undefined;
+          states[i] = "Choose process and filament";
+          renderCompare();
+          notify(
+            "No complete saved combination. Select a compatible process and filament.",
+          );
+        }
+      }),
+  );
+  document.querySelectorAll<HTMLSelectElement>("[data-preset]").forEach(
+    (el) =>
+      (el.onchange = () => {
+        const [index, kind] = el.dataset.preset!.split(":");
+        const i = Number(index);
+        const profile = library!.profiles.find((p) => p.__sp_id === el.value);
+        if (!profile) return;
+        const bundle = structuredClone(bundles[i]);
+        bundle[kind as "process" | "filament"] = structuredClone(profile);
+        useBundle(
+          i,
+          bundle,
+          !bundle.process.__sp_id || !bundle.filament.__sp_id,
+        );
+      }),
+  );
   document.querySelectorAll<HTMLElement>(".settings-scroll").forEach((el) => {
     el.scrollTop = scroll;
     el.addEventListener("scroll", () => {
@@ -354,7 +433,7 @@ async function slice(i: number) {
 }
 function importDialog(i: number) {
   modal(
-    `<h2>Import ${i === 0 ? "current" : "target"} profiles</h2><p>Import a machine, process and filament JSON, plus all inherited parents. Or read installed profiles with local permission.</p><div class="actions"><button id="manual-import">Import JSON files</button><button id="local-import">Read local Orca profiles</button><button id="portable-import">Choose portable folder</button></div><div id="selectors"></div>`,
+    `<h2>Import ${i === 0 ? "current" : "target"} profiles</h2><p>One local approval imports configured printers and compatible saved presets. Subsequent sessions restore this library automatically.</p><div class="actions"><button id="manual-import">Import JSON files</button><button id="local-import">Read local Orca profiles</button><button id="portable-import">Choose portable folder</button></div><details><summary>Advanced / Browse All Profiles</summary><p>Installed system catalog includes unconfigured printers and incompatible presets. Select deliberately; this view does not establish compatibility.</p><button id="browse-all">Load full installed catalog</button><p>${escape(library?.note || "")}</p></details><div id="selectors"></div>`,
   );
   const choose = () => {
     $("#selectors").innerHTML =
@@ -425,13 +504,19 @@ function importDialog(i: number) {
       return;
     }
     try {
-      const result = await helper.call<{
-        profiles: Profile[];
-        warnings: string[];
-      }>("/profiles", { chooseRoot: portable });
+      const result = await helper.call<Library>("/profiles", {
+        chooseRoot: portable,
+      });
       catalog = result.profiles;
+      if (result.printers?.length) {
+        acceptLibrary(result);
+        $<HTMLDialogElement>("#modal").close();
+        await restoreLibrary();
+        renderCompare();
+        return;
+      }
       choose();
-      if (result.warnings.length)
+      if (result.warnings?.length)
         notify(result.warnings.slice(0, 3).join("; "));
     } catch (e) {
       notify(String(e));
@@ -439,7 +524,97 @@ function importDialog(i: number) {
   };
   $("#local-import").onclick = () => void local();
   $("#portable-import").onclick = () => void local(true);
-  if (catalog.length) choose();
+  $("#browse-all").onclick = async () => {
+    if (!requireHelper()) return;
+    try {
+      const r = await helper.call<Library>("/profiles", { all: true });
+      catalog = r.profiles;
+      choose();
+    } catch (e) {
+      notify(String(e));
+    }
+  };
+  if (catalog.length && !library?.imported) choose();
+}
+function useBundle(i: number, bundle: Bundle, incomplete = false) {
+  bundles[i] = structuredClone(bundle);
+  importedProcesses[i] = structuredClone(bundle.process);
+  isDemo[i] = incomplete;
+  summaries[i] = undefined;
+  states[i] = incomplete ? "Choose process and filament" : "Not sliced";
+  if (i === selected) {
+    tuned = structuredClone(bundle);
+    tunedDemo = incomplete;
+    summaries[2] = undefined;
+    states[2] = "Not sliced";
+    clearTimeout(timer);
+  }
+  if (!incomplete) {
+    rememberedPicks.set(String(bundle.machine.__sp_id), {
+      process: String(bundle.process.__sp_id),
+      filament: String(bundle.filament.__sp_id),
+    });
+    if (connected)
+      void helper
+        .call("/workspace", {
+          ...(!isDemo[0] ? { a: bundles[0] } : {}),
+          ...(!isDemo[1] ? { b: bundles[1] } : {}),
+        })
+        .catch((e) => notify(String(e)));
+  }
+  $("#notice").textContent =
+    "Saved local profiles · select a common model for verified estimates.";
+  renderCompare();
+}
+function acceptLibrary(result: Library) {
+  if (!result.printers) return;
+  library = result;
+  catalog = result.profiles;
+  if (result.warnings?.length) notify(result.warnings.slice(0, 3).join("; "));
+}
+async function restoreLibrary() {
+  if (restoredWorkspace || !library?.imported) return;
+  const saved = await helper.call<{ a?: Bundle; b?: Bundle }>("/workspace");
+  restoredWorkspace = true;
+  for (const [i, key] of ["a", "b"].entries()) {
+    const snapshot = saved[key as "a" | "b"];
+    const printer =
+      i === 0
+        ? library.printers.find((p) => p.current) || library.printers[0]
+        : library.printers.find(
+            (p) => p.name.toLowerCase().includes("sv08") && p.source === "User",
+          ) ||
+          library.printers.find((p) => p.id !== bundles[0].machine.__sp_id);
+    const bundle = snapshot || (printer && bundleFor(library, printer));
+    if (bundle) {
+      bundles[i] = structuredClone(bundle);
+      importedProcesses[i] = structuredClone(bundle.process);
+      isDemo[i] = false;
+    }
+  }
+  tuned = structuredClone(bundles[selected]);
+  tunedDemo = isDemo[selected];
+  $("#notice").textContent =
+    "Cached Orca profiles restored · source changes retain original snapshots.";
+  renderCompare();
+}
+async function refreshLibrary(announce = true) {
+  if (refreshBusy || !connected) return;
+  refreshBusy = true;
+  try {
+    const result = await helper.call<Library>("/profiles", {});
+    acceptLibrary(result);
+    await restoreLibrary();
+    renderCompare();
+    if (announce)
+      notify(
+        "Refreshed from OrcaSlicer. Existing comparison and experiment snapshots retained; select a profile again to use changed settings.",
+      );
+  } catch (e) {
+    if (announce) notify(String(e));
+  } finally {
+    refreshBusy = false;
+  }
 }
 function savePreset() {
   modal(
@@ -628,6 +803,15 @@ function renderPresets() {
   const all = presets();
   $("#other").innerHTML =
     `<h2>Saved Presets</h2><p>Local experiments · ${all.length} saved. Exported JSON can be imported through OrcaSlicer’s Import Configs menu.</p><div class="saved-grid">${all.map((p, i) => `<article class="saved-card"><h3>${escape(p.name)}</h3><p>${escape(p.bundle.machine.name)}</p><p>${p.summary ? duration(p.summary.seconds) + " · saved estimate; re-slice to install" : "Unverified experiment"}</p><small>${escape(p.created)}</small><div class="actions"><button data-load="${i}">Load</button><button data-export="${i}">Export JSON</button><button data-delete="${i}">Delete</button></div></article>`).join("") || "<p>No saved experiments yet. Use Save Preset in Live Tuning.</p>"}</div>`;
+  document.querySelectorAll<HTMLElement>(".saved-card").forEach((card, i) => {
+    const status = sourceStatus(all[i].bundle, library);
+    if (status) {
+      const note = document.createElement("p");
+      note.className = "source-warning";
+      note.textContent = status;
+      card.append(note);
+    }
+  });
   document.querySelectorAll<HTMLElement>("[data-load]").forEach(
     (e) =>
       (e.onclick = () => {
@@ -694,25 +878,72 @@ function renderPresets() {
 }
 function renderSettings() {
   $("#other").innerHTML =
-    `<h2>Local companion settings</h2><p>The web app runs on free static hosting. Profiles, model files, slicing, and Moonraker connections stay on your PC.</p><ol><li>Install Python 3.11+ or download SpeedPrinterHelper.exe from the repository’s latest successful CI run.</li><li>Run <code>python helper/server.py</code> (or the packaged EXE).</li><li>Paste the session pairing token from the helper console. It is kept in memory only.</li></ol><div class="form-grid"><label>Session pairing token<input id="token" type="password" autocomplete="off" placeholder="Paste local helper token"></label><button id="pair" class="primary">Pair local helper</button></div><p id="pair-status">${connected ? "Connected" : "Disconnected"}</p><p>Browser local-network permission may be required. If your browser blocks hosted-to-local access, run <code>npm run dev</code> and use the local web app.</p><h3>Manual fallback</h3><p>Import JSON files from Compare & Tune. Save an experiment and export its three JSON profiles from Saved Presets, then use OrcaSlicer → File → Import → Import Configs. Real recalculation requires the helper.</p><h3>Privacy and limits</h3><p>Pairing tokens and Moonraker API keys are never persisted. Saved presets are stored in this browser; private settings and custom G-code can be included. Clear saved experiments on shared PCs. A faster estimate does not prove the printer can safely operate at those limits.</p><a href="https://github.com/khisanthax/Speed-Printer" target="_blank" rel="noreferrer">Source, setup documentation and helper downloads ↗</a>`;
+    `<h2>Local companion settings</h2><p>Run SpeedPrinterHelper.exe. It stays in the Windows tray without a console. Right-click the tray icon → Copy Pairing Code, then paste it here once.</p><div class="form-grid"><label>Pairing code<input id="token" type="password" autocomplete="off" placeholder="Copy from the helper tray menu"></label><button id="pair" class="primary">Pair local helper</button><button id="reconnect">Reconnect</button><button id="revoke">Revoke this browser</button></div><p id="pair-status">${connected ? "Connected · browser trust remembered" : "Disconnected · start the helper or pair this browser"}</p><p>Trusted browsers reconnect automatically. Closing helper Settings keeps it running; Exit in its tray menu stops it. Start with Windows is optional and off by default.</p><h3>Orca profile library</h3><button id="refresh-settings">Refresh from OrcaSlicer</button><p>One local permission imports configured printers and compatible saved presets. Refresh adds new presets and flags changed or missing sources without replacing experiment snapshots. Portable and account overrides are in the helper tray Settings.</p><h3>Manual fallback</h3><p>Import JSON files from Compare &amp; Tune. Export the three profiles from Saved Presets and use OrcaSlicer → Import Configs. Verified estimates require the local helper.</p><h3>Privacy</h3><p>Browser trust uses a non-exportable signing key in IndexedDB; no persistent bearer token is stored in page storage. Helper trust and profile cache use Windows protection. Scripts running on this trusted web origin can request signing; protect this browser and account. Profile snapshots and experiments stay local. Moonraker API keys remain in memory.</p><a href="https://github.com/khisanthax/Speed-Printer/releases/latest" target="_blank" rel="noreferrer">Download the Windows tray helper ↗</a>`;
   $("#pair").onclick = async () => {
-    helper.token = $<HTMLInputElement>("#token").value.trim();
+    const code = $<HTMLInputElement>("#token").value.trim();
     $<HTMLInputElement>("#token").value = "";
     try {
-      const h = await helper.call<{ orcaFound: boolean }>("/health");
-      connected = true;
-      $("#pair-status").textContent = h.orcaFound
-        ? "Connected · Orca executable found"
-        : "Connected · configure --orca with a valid executable";
-      $("#connection-state").textContent = "Local helper paired";
-      $("#connection-dot").classList.add("online");
-      notify("Helper paired for this browser session.");
+      await helper.pair(code);
+      await connect();
+      $("#pair-status").textContent = "Connected · browser trust remembered";
+      notify("Browser paired. Future sessions reconnect automatically.");
     } catch (e) {
       connected = false;
       helper.token = "";
       $("#pair-status").textContent = String(e);
     }
   };
+  $("#reconnect").onclick = () =>
+    void connect().catch((e) => {
+      $("#pair-status").textContent = String(e);
+    });
+  $("#revoke").onclick = async () => {
+    try {
+      await helper.revoke();
+      setConnected(false);
+      $("#pair-status").textContent =
+        "Pairing revoked. Copy a new code to trust this browser again.";
+    } catch (e) {
+      notify(String(e));
+    }
+  };
+  $("#refresh-settings").onclick = () => void refreshLibrary();
+}
+let helperInstance = "";
+function setConnected(value: boolean) {
+  connected = value;
+  $("#connection-state").textContent = value
+    ? "Local helper connected"
+    : "Helper disconnected";
+  $("#connection-dot").classList.toggle("online", value);
+}
+async function connect() {
+  const health = await helper.call<{ orcaFound: boolean; instance?: string }>(
+    "/health",
+  );
+  if (
+    helperInstance &&
+    health.instance &&
+    helperInstance !== health.instance &&
+    model
+  ) {
+    model = "";
+    modelName = "Helper restarted · select the common model again";
+    $("#model-name").textContent = modelName;
+    states = states.map((_, i) =>
+      summaries[i] ? "Stale · helper restarted" : "Not sliced",
+    );
+    updateSummaries();
+  }
+  helperInstance = health.instance || "";
+  const wasConnected = connected;
+  setConnected(true);
+  if (!wasConnected) {
+    const result = await helper.call<Library>("/library");
+    acceptLibrary(result);
+    await restoreLibrary();
+    if (library?.imported) void refreshLibrary(false);
+  }
 }
 type Job = {
   filename: string;
@@ -865,3 +1096,13 @@ $("#choose-model").onclick = async () => {
   }
 };
 renderCompare();
+const refreshButton = document.createElement("button");
+refreshButton.id = "refresh-library";
+refreshButton.textContent = "Refresh from OrcaSlicer";
+$(".workspace-status").append(refreshButton);
+refreshButton.onclick = () => void refreshLibrary();
+void connect().catch(() => setConnected(false));
+setInterval(() => void connect().catch(() => setConnected(false)), 10000);
+setInterval(() => {
+  if (connected && library?.imported) void refreshLibrary(false);
+}, 60000);

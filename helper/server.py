@@ -16,6 +16,9 @@ from tkinter import filedialog, messagebox
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 from core import Engine, catalog_from_roots, flatten, install_presets, inspect_model
+from auth import Trust
+from storage import Store, MemoryStore
+from discovery import Library
 
 class LocalServer(ThreadingHTTPServer):
     allow_reuse_address = False
@@ -64,17 +67,24 @@ def moon_read(base, route, api_key=''):
         return json.loads(data)
 
 class State:
-    def __init__(self, args):
+    def __init__(self, args, test_mode=False, store=None):
+        self.test_mode = test_mode
+        self.store = store or (MemoryStore() if test_mode else Store(Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'SpeedPrinter'))
+        self.trust = Trust(self.store)
+        self.instance = secrets.token_hex(12)
         self.token = secrets.token_urlsafe(32)
         self.origins = set(args.origin)
         self.engine = Engine(args.orca)
+        self.library = Library(self.store, args.orca)
         self.roots = [Path(args.orca).parent / 'resources' / 'profiles', Path(os.environ.get('APPDATA', '~')) / 'OrcaSlicer' / 'system', Path(os.environ.get('APPDATA', '~')) / 'OrcaSlicer' / 'user']
         self.models = {}
         self.jobs = {}
         self.pool = ThreadPoolExecutor(max_workers=1)
         self.lock = threading.Lock()
-        self.read_permission = False
+        self.read_permission = bool(self.store.data.get('profilePermission'))
         self.install_root = None
+        if self.read_permission:
+            self.engine.catalog = self.library.document.get('profiles',[])
 
     def submit(self, fn):
         if sum(j['state'] in ('pending', 'running') for j in self.jobs.values()) >= 4:
@@ -105,7 +115,7 @@ def handler_for(state):
                 return False
             if self.headers.get('Origin') not in state.origins:
                 return False
-            return not auth or hmac.compare_digest(self.headers.get('Authorization', ''), 'Bearer ' + state.token)
+            return not auth or (hmac.compare_digest(self.headers.get('Authorization', ''), 'Bearer ' + state.token) if state.test_mode else state.trust.permitted(self.headers.get('Origin'), self.headers.get('Authorization', '')))
 
         def reply(self, status, value):
             raw = json.dumps(value).encode()
@@ -136,19 +146,26 @@ def handler_for(state):
             if not self.permitted():
                 return self.reply(403, {'error': 'Origin, host or session token denied'})
             if self.path == '/health':
-                return self.reply(200, {'version': '0.1.0', 'orcaFound': Path(state.engine.executable).is_file()})
+                return self.reply(200, {'version': '0.2.0', 'instance':state.instance, 'orcaFound': Path(state.engine.executable).is_file()})
+            if self.path == '/library':
+                return self.reply(200, state.library.document)
+            if self.path == '/workspace':
+                return self.reply(200, state.store.data.get('workspace', {}))
             if self.path.startswith('/jobs/'):
                 return self.reply(200, state.jobs.get(self.path[6:], {'state': 'missing'}))
             return self.reply(404, {'error': 'Unknown route'})
 
         def do_POST(self):
-            if not self.permitted():
+            auth_route = self.path in ('/auth/challenge', '/auth/pair', '/auth/resume')
+            if not self.permitted(not auth_route):
                 return self.reply(403, {'error': 'Origin, host or session token denied'})
             try:
                 length = int(self.headers.get('Content-Length', '0'))
                 if length <= 0 or length > 8_000_000 or self.headers.get('Content-Type') != 'application/json':
                     raise ValueError('Expected JSON body under 8 MB')
                 body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError('Expected a JSON object')
                 # Serialize local permission dialogs and queue operations.
                 with state.lock:
                     result = self.dispatch(body)
@@ -157,11 +174,37 @@ def handler_for(state):
                 return self.reply(400, {'error': str(exc)})
 
         def dispatch(self, body):
+            if self.path == '/auth/challenge':
+                if state.test_mode: return {'legacySession':True}
+                return state.trust.challenge(self.headers['Origin'],body.get('clientId'))
+            if self.path in ('/auth/pair','/auth/resume'):
+                return state.trust.authenticate(self.headers['Origin'],body,self.path == '/auth/pair')
+            if self.path == '/auth/revoke':
+                state.trust.revoke(self.headers.get('Authorization'))
+                return {'revoked':True}
+            if self.path == '/workspace':
+                # Snapshots preserve work across source changes; strip network credentials.
+                saved = {}
+                for key in ('a','b'):
+                    if body.get(key): saved[key] = flatten(body[key],state.engine.catalog)
+                state.store.update(workspace=saved)
+                return {'saved':True}
             if self.path == '/profiles':
                 if not state.read_permission:
                     state.read_permission = bool(dialog(lambda r: messagebox.askyesno('Speed Printer · profile access', 'Allow Speed Printer to read Orca preset JSON from the standard system and user directories? Data stays in this browser and local helper.', parent=r)))
                 if not state.read_permission:
                     raise ValueError('Local profile-read permission declined')
+                if not state.test_mode:
+                    if not state.store.data.get('profilePermission'):
+                        state.store.update(profilePermission=True)
+                    if body.get('chooseRoot'):
+                        folder = dialog(lambda r: filedialog.askdirectory(title='Select Orca data directory (contains OrcaSlicer.conf and user)', parent=r))
+                        if folder:
+                            state.store.update(dataDir=folder)
+                            state.library = Library(state.store,state.engine.executable,folder)
+                    result = state.library.refresh(bool(body.get('all')))
+                    state.engine.catalog = state.library.catalog
+                    return result
                 if body.get('chooseRoot'):
                     folder = dialog(lambda r: filedialog.askdirectory(title='Select portable Orca data or profiles directory', parent=r))
                     if folder:
@@ -223,16 +266,8 @@ def handler_for(state):
     return Handler
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--orca', default=r'C:\Program Files\OrcaSlicer\orca-slicer.exe')
-    parser.add_argument('--origin', action='append', default=['http://127.0.0.1:5173', 'http://127.0.0.1:4173', 'https://khisanthax.github.io'])
-    args = parser.parse_args()
-    state = State(args)
-    print('Speed Printer helper listening ONLY on http://127.0.0.1:8377', flush=True)
-    print('Allowed origins: ' + ', '.join(sorted(state.origins)), flush=True)
-    print('Pairing token (session only; paste into Settings): ' + state.token, flush=True)
-    print('Press Ctrl+C to revoke the token and stop.', flush=True)
-    LocalServer(('127.0.0.1', 8377), handler_for(state)).serve_forever()
+    from tray import main as tray_main
+    tray_main()
 
 if __name__ == '__main__':
     main()

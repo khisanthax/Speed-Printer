@@ -4,11 +4,15 @@
 
 `src/main.ts` renders the approved fixed desktop shell. Vite builds a static TypeScript client for GitHub Pages. `src/domain.ts` owns preset validation, inheritance, unit formatting, tuning ranges and demo data. The three settings panels share identical rows and scroll offsets. Printer photos are displayed from the exact approved reference asset through CSS positioning; no inferred hardware specifications are added.
 
-The browser calls `helper/server.py` over authenticated loopback HTTP. Native dialogs mediate profile reads, model selection and installation. The helper uses Python's standard library at runtime; PyInstaller produces an optional Windows EXE. Orca is a separately installed dependency, never bundled. Slicing jobs are serialized on one worker to bound resource use; up to four jobs can be outstanding. Results remain session-local.
+The browser calls `helper/server.py` over authenticated loopback HTTP. Native dialogs mediate profile reads, model selection and installation. The Windows tray entry point uses pystray/Pillow and tkinter; cryptography verifies P-256 proofs and DPAPI protects local state. PyInstaller builds a windowed EXE. No Electron, cloud account or database is used. Orca is a separately installed dependency, never bundled. Slicing jobs are serialized on one worker to bound resource use; up to four jobs can be outstanding. Results remain session-local.
 
 ## Contracts
 
-- `GET /health`: helper version and executable availability.
+- `GET /health`: helper version, instance identifier and executable availability.
+- `POST /auth/challenge`, `/auth/pair`, `/auth/resume`: exact Host/Origin checked, bounded one-use challenge/proof exchange. Initial pairing additionally requires the tray-issued five-minute code. Session tokens last at most eight hours; restarts retain public-key trust, not sessions.
+- `POST /auth/revoke`: revoke this authenticated browser; tray Settings revokes all.
+- `GET /library`: protected cached curated library; `POST /profiles` incrementally refreshes after one native approval, `{all:true}` deliberately loads full catalog.
+- `GET/POST /workspace`: DPAPI-protected comparison snapshots, separate from source presets.
 - `POST /profiles {chooseRoot?}`: permission-gated JSON discovery; returns named presets.
 - `POST /model {}`: native STL/3MF picker; returns opaque session ID and filename, never a browser-selected filesystem path.
 - `POST /slice {bundle,model}`: validates and flattens the selected machine/process/filament, then returns a job ID.
@@ -18,7 +22,7 @@ The browser calls `helper/server.py` over authenticated loopback HTTP. Native di
 - `POST /history {url,apiKey?}`: fixed read-only Moonraker `/server/history/list?limit=100&order=desc`.
 - `POST /limits {url,apiKey?}`: fixed read-only `/printer/objects/query?toolhead&configfile`.
 
-Every endpoint requires an exact allowed Origin, `Host: 127.0.0.1:8377` and a matching session bearer token. Preflight requires Host/Origin but not the token. No wildcard CORS or cookie authentication is used. Browser token state and Moonraker keys are in memory. The browser's platform local-network policy may require local use of the web app.
+Every endpoint requires an exact allowed Origin and `Host: 127.0.0.1:8377`. Non-auth endpoints additionally require a matching session bearer token. Preflight requires Host/Origin but not the token. No wildcard CORS or cookie authentication is used. Browser token state and Moonraker keys are in memory. The browser's platform local-network policy may require local use of the web app.
 
 ## Slicing provenance
 
@@ -32,7 +36,7 @@ For each selected key, replace only its value with the target value and measure 
 
 ## Persistence and installation
 
-Only experiments persist in browser localStorage. Pairing credentials, Moonraker data and model IDs do not. Exports contain three flattened JSON presets. Installation creates `machine/<new-name> - machine.json`, `process/<new-name> - process.json` and `filament/<new-name> - filament.json` below the locally selected account folder. It updates names/settings IDs and custom-user markers. Existing paths fail; partial creates roll back. Open a new Orca window after installation to load disk presets; preserve existing unsaved projects. No original profile is modified.
+Experiments persist in browser localStorage. Browser identity is an opaque non-exportable P-256 CryptoKey persisted by IndexedDB structured clone; its public key is registered in the helper DPAPI store. Page scripts cannot extract private bytes but can request signing on the trusted origin. Only ephemeral bearer tokens and Moonraker data stay in memory. Model IDs are session-local: after helper restart the app marks estimates stale and requests the model again. The helper persists approved curated profile metadata/settings and comparison snapshots with DPAPI. Incremental stat manifests skip unchanged JSON/OPC reads; stable reads and last-good snapshots tolerate active writes. Source hashes flag changed or missing presets without altering experiments. Renames appear as a missing source plus a newly discovered preset; no filename/mtime guessing remaps an experiment. Exports contain three flattened JSON presets. Installation creates `machine/<new-name> - machine.json`, `process/<new-name> - process.json` and `filament/<new-name> - filament.json` below the locally selected account folder. It updates names/settings IDs and custom-user markers. Existing paths fail; partial creates roll back. Open a new Orca window after installation to load disk presets; preserve existing unsaved projects. No original profile is modified.
 
 ## Testing and operational limits
 
@@ -45,3 +49,5 @@ System discovery reads JSON and Orca `.opc` binary cache format 2. The bounded c
 Personal comparison uses all parts auto-arranged onto one plate, with scope and generated object count returned alongside the estimate. A narrowly bounded inactive raft sentinel repair affects only the temporary snapshot and is disclosed in result notes. The original source hash remains the cache/provenance identity. Common-process mode copies the complete inherited process from A onto B, retaining B’s machine and calibrated filament; imported processes can be restored. It does not claim to equalize every machine/material constraint or expose implicit engine defaults. Connection and credential fields are excluded from discovered/effective presets.
 
 `POST /export-project {bundle,model}` opens a native save picker and queues a fresh slice into an exclusively created 3MF file. It does not overwrite source projects or dispatch a print. This preserves the exact comparison arrangement for Orca GUI use. Motion-limit analysis groups are explicit simulations: X/Y jerk is substituted together, or the extruding acceleration cap alone, with ordinary isolated/cumulative measurement. The client prevents applying any simulation-containing result.
+
+The tray owns a per-user Windows mutex and activation event. Relaunch signals the existing Settings window. A hidden tkinter owner keeps Settings independent of helper lifetime; pystray provides status/menu controls. Opt-in HKCU Run startup uses the existing executable, default off. Restart waits for idle jobs, reconstructs sessions from protected trust and preserves imported profiles. Production has no legacy token pairing: only explicitly constructed test fixtures expose the old protocol.

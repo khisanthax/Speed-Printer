@@ -10,7 +10,7 @@ import server
 
 def main():
     orca=sys.argv[1]
-    state=server.State(argparse.Namespace(orca=orca,origin=['http://127.0.0.1:5173']))
+    state=server.State(argparse.Namespace(orca=orca,origin=['http://127.0.0.1:5173']),test_mode=True)
     state.roots=[Path(orca).parent/'resources/profiles']
     state.read_permission=True  # Test fixture may only read bundled public presets.
     with tempfile.TemporaryDirectory() as temp:

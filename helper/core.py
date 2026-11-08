@@ -248,7 +248,7 @@ class Engine:
             snapshot.write_bytes(prepared)
             inspect_model(snapshot)
             for kind, preset in bundle.items():
-                (work / f'{kind}.json').write_text(json.dumps(preset), encoding='utf-8')
+                (work / f'{kind}.json').write_text(json.dumps({k:v for k,v in preset.items() if not k.startswith('__sp_')}), encoding='utf-8')
             output = work / 'output'
             output.mkdir()
             command = [self.executable, str(snapshot), '--load-settings', f'{work / "machine.json"};{work / "process.json"}',
@@ -353,6 +353,7 @@ def install_presets(bundle, name, directory, validated_hashes):
             folder = directory / kind
             folder.mkdir(exist_ok=True)
             p = dict(bundle[kind])
+            p = {k:v for k,v in p.items() if not k.startswith('__sp_')}
             p.update(name=f'{name} - {kind}', inherits='', **{'from': 'User', 'is_custom_defined': '1'})
             p.pop('setting_id', None)
             if kind == 'machine':

@@ -4,11 +4,11 @@ Compare OrcaSlicer presets, measure model-specific speed effects with real local
 
 - **Web app:** https://khisanthax.github.io/Speed-Printer/
 - **Source:** https://github.com/khisanthax/Speed-Printer
-- **Windows helper:** use current source or the `SpeedPrinterHelper-Windows` artifact from the latest successful [Test and package run](https://github.com/khisanthax/Speed-Printer/actions/workflows/ci.yml). The original v0.1.0 release predates the personal-profile and installer fixes. The current EXE is unsigned; no installer or commercial distribution setup is required.
+- **Windows tray helper:** download the EXE and SHA256SUMS from the [latest release](https://github.com/khisanthax/Speed-Printer/releases/latest). Exit an older console helper first. The EXE is unsigned and needs no installer.
 
 ## Quick start
 
-Requires Node 22.12+ for development, Python 3.11+ for the source helper, and an installed OrcaSlicer with working CLI support. The hosted web app needs no Node installation.
+Requires Node 22.12+ for development, Python 3.13+ for the source helper, and an installed OrcaSlicer with working CLI support. The hosted web app needs no Node installation.
 
 ```powershell
 git clone https://github.com/khisanthax/Speed-Printer.git
@@ -17,17 +17,17 @@ npm ci
 npm run dev
 ```
 
-In a separate terminal:
+For source development, install dependencies with `pip install -r helper/requirements.txt`, then launch without a console:
 
 ```powershell
-python helper/server.py
+pythonw helper/tray.py
 # Portable / alternate Orca installation:
-python helper/server.py --orca "D:\Apps\OrcaSlicer\orca-slicer.exe"
+pythonw helper/tray.py --orca "D:\Apps\OrcaSlicer\orca-slicer.exe"
 ```
 
 1. Open the hosted app or local URL printed by Vite. Use a desktop viewport, preferably 1672 × 941 or larger; the approved layout has a 1280 px minimum width.
-2. Open **Settings**, paste the session token printed by the helper, and pair. The token stays in memory and is revoked when the helper stops. Never send it in chat or commit it.
-3. Use **Import profiles** in A and B. Read local profiles (requires a native permission dialog), choose a portable directory, or select exported Orca JSON files including their parents. Choose one machine, process and filament for each column. Demo profiles are incomplete examples and cannot be sliced.
+2. Run the EXE. Right-click its Windows tray icon → **Copy Pairing Code**, then paste into the website's **Settings** and pair once. The code expires in five minutes and is consumed on success. Trusted browsers reconnect after browser/helper restarts. Closing helper Settings leaves it running; tray **Exit** stops it. **Start with Windows** is off until explicitly enabled.
+3. Click **Refresh from OrcaSlicer** and approve the native read dialog once. A and B now offer **Printer / Process / Filament**, with saved per-printer combinations. Cached profiles and comparison snapshots persist locally. Refresh finds new/changed presets; older snapshots and saved experiments are retained and flagged. Select the profile again to adopt updated settings. **Import / Advanced** provides manual JSON import, portable directory selection and collapsed full-catalog browsing. Demo profiles cannot be sliced.
 4. Choose **Common model / 3MF**. The helper opens a native file picker; models stay local. All project parts are auto-arranged onto one plate per printer; original multi-plate placement is not retained. The result includes the generated object count. Use **Compare conditions** to inspect all inherited differences or apply A’s complete process to both printers. Each printer keeps its calibrated material and machine limits. Slice A and B, then choose which printer C modifies.
 5. Adjust sliders or numerical values. Recalculation debounces for 650 ms. Existing results are marked stale until a matching slice completes. **Analyze impact** runs controlled re-slices; select at most eight settings.
 6. **Save Preset** stores an experiment in this browser. For installation, successfully slice C, use a new name, select the correct account directory in the native dialog, and confirm. Open a new Orca window (preserve unsaved projects) and select the new machine, process and filament presets.
@@ -38,7 +38,11 @@ Browser local-network permissions may be required for the hosted site to reach t
 
 Orca presets reference named parents. Both browser and helper resolve inheritance and includes recursively within vendor namespaces, detect missing/ambiguous parents and cycles, and retain arrays and percentage values. System discovery supports JSON and Orca binary `.opc` cache format 2, including CRC validation; unsupported/corrupt caches produce warnings and require JSON export fallback. Unknown or absent values are shown as missing. Relative percentages retain their meaning and are not mislabeled as absolute speeds. Tuning array values changes the first filament/extruder entry and preserves other entries. Engine defaults not explicitly present in exported profiles are applied by Orca during slicing; the comparison table does not pretend to enumerate all version-specific defaults.
 
-Standard roots are `%APPDATA%\OrcaSlicer\system`, `%APPDATA%\OrcaSlicer\user`, and `resources\profiles` beside the selected executable. Portable roots are explicitly chosen by the local user. Account directories generally live under `user\<account-id>` or `user\default`; select the folder containing `machine`, `process`, and `filament` when installing. The helper never selects an account silently.
+Discovery prefers the running Orca executable, then registered/standard installations. It reads `OrcaSlicer.conf`: `presets.machine` is the current printer, `orca_presets` stores remembered per-printer combinations, `models` enables system printer/nozzle variants, and `filaments` enables system materials. The remembered map is not chronological history; no current selection is guessed from modification times. Project-only selections may have no disk preset and remain explicitly missing.
+
+The active account uses `app.preset_folder`, a unique current-printer match, or Orca's offline default. Ambiguity requires a helper Settings override. Select portable/custom data and account directories there when standard discovery cannot identify them. Reading never changes Orca's active selections.
+
+Default choices include saved user printers and enabled system variants, relevant compatible user presets, and remembered/default/enabled materials. Explicit `compatible_printers` lists take priority over conditions, with Orca's immediate-parent match for user printers. Arbitrary condition expressions aren't evaluated: unknown conditions are excluded unless Orca remembers that selection, which is labeled. Advanced deliberately exposes the full catalog. This supports the demonstrated personal profiles rather than claiming complete vendor-condition compatibility. References: [Orca compatibility and visibility](https://github.com/OrcaSlicer/OrcaSlicer/blob/v2.5.0-alpha/src/libslic3r/Preset.cpp), [saved selections](https://github.com/OrcaSlicer/OrcaSlicer/blob/v2.5.0-alpha/src/libslic3r/AppConfig.cpp).
 
 If the helper is unavailable, import exported JSON manually, tune, save, then export the three JSON files from **Saved Presets**. Use OrcaSlicer **File → Import → Import Configs**. This fallback cannot calculate estimates in the browser. JSON exports may contain private profile settings and custom G-code: keep them private.
 
@@ -75,7 +79,7 @@ CI tests the client in Chromium and Python helper on Windows and packages the co
 
 ## Security
 
-The companion binds only `127.0.0.1:8377`, validates the Host and exact allowed Origin, and requires a random 256-bit session bearer token, including on reads. Local native permission protects profile discovery, model selection and installation. Requests are bounded, paths come from native pickers, subprocess arguments are passed without a shell, post-processing commands are rejected, and new preset files use exclusive creation with rollback on partial failure. Model parsing still runs a native slicer: import trusted models and keep Orca updated. Moonraker endpoints are restricted to private LAN addresses and fixed GET routes, with redirects and proxies disabled. Do not expose the helper through a tunnel or port forward.
+The companion binds only `127.0.0.1:8377`, validates the Host and exact allowed Origin, and requires an ephemeral authenticated session, including on reads. Initial pairing registers a browser public key; one-use, origin-bound P-256 signed challenges resume trust. Browser private keys are non-exportable CryptoKeys in IndexedDB, not bearer strings in localStorage. Windows DPAPI protects helper trust, cached profiles and comparison snapshots under `%LOCALAPPDATA%\SpeedPrinter\state.dpapi`. Page scripts cannot export the private key, but scripts on the trusted origin can request signing: same-origin script compromise remains a trust boundary. Revoke one browser in web Settings or all browsers in tray Settings. Revoking all also requires profile-read permission again. Local native permission protects profile discovery, model selection and installation. Requests are bounded, paths come from native pickers, subprocess arguments are passed without a shell, post-processing commands are rejected, and new preset files use exclusive creation with rollback on partial failure. Model parsing still runs a native slicer: import trusted models and keep Orca updated. Moonraker endpoints are restricted to private LAN addresses and fixed GET routes, with redirects and proxies disabled. Do not expose the helper through a tunnel or port forward.
 
 Public fixtures and demos contain no private printer configurations or personal job history. Saved browser experiments can contain private data; clear them on shared computers. No analytics or cloud profile storage is used.
 

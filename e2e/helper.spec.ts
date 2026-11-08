@@ -17,6 +17,7 @@ test("helper lifecycle ignores stale jobs and replaces estimates only on complet
       return;
     }
     let result: unknown = {};
+    if (path === "/auth/challenge") result = { legacySession: true };
     if (path === "/health") result = { orcaFound: true };
     if (path === "/model") result = { id: "model", name: "test-cube.stl" };
     if (path === "/slice") result = { id: String(++slices) };
