@@ -78,7 +78,7 @@ export function resolve(
       ...parent,
       ...resolve(item, profiles, next, p.type, p.__sp_scope),
     };
-  const result = { ...parent, ...p };
+  const result: Profile = { ...parent, ...p };
   if (!Object.hasOwn(p, "renamed_from")) delete result.renamed_from;
   return result;
 }
