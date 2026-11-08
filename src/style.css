@@ -692,6 +692,15 @@ td small {
   color: #8a7797;
   margin-top: 5px;
 }
+dialog td {
+  overflow-wrap: anywhere;
+  max-width: 240px;
+}
+.setting-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #8950ef;
+}
 #toast {
   position: fixed;
   bottom: 20px;

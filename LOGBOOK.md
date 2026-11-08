@@ -71,3 +71,10 @@ Read this file before continuing work. Never commit private profiles, credential
 - Both app summaries show Verified local slice, G-code normal-mode estimates and measured filament totals. Left the paired comparison open. Personal results and screenshots remain local and are not committed.
 - Comparison qualification: both use PETG and 0.20 mm processes, but supports remain disabled in the current process and enabled in the target process; their calibrated filament/process settings also differ. No physical print or printer control command was issued.
 - Fixed inherited rename-alias metadata leaking onto child presets, which could cause false cycles when re-resolving an already effective user preset. Regression test added to the synthetic alias fixture. Six TypeScript and sixteen Python tests pass.
+
+## 2026-11-08 — Personal-use reliability scope
+- Scope narrowed to the existing architecture and the two personal printer workflows; no commercial distribution, signing or platform expansion.
+- Integrated the demonstrated inactive legacy raft normalization into private slicing snapshots; preserve original model hash and geometry, reject that repair with active rafts, and report scope/normalization notes plus generated object count.
+- Added complete inherited-setting differences, reversible common-process comparison retaining calibrated materials/machine limits, support checkbox, feature acceleration tuning and application of measured analysis combinations. Blank numeric input no longer becomes accidental zero; closed analysis dialogs cannot apply stale experiments.
+- Removed connection host/credential fields from discovered/effective presets so slicing and browser experiment saves do not need printer credentials. Added narrow parameter-only validation diagnostics and support-placement warning disclosure.
+- Tests so far: 18 Python tests, 6 TypeScript tests and 3 browser journeys pass. Actual original-project slicing and controlled personal-profile experiments are running; native Orca preset pickup remains the next acceptance check. No physical print requested or started.

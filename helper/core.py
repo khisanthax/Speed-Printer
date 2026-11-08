@@ -2,6 +2,7 @@
 from __future__ import annotations
 import copy
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -23,10 +24,18 @@ RANGES = {
     'slow_down_layer_time': ('filament', 0, 60), 'sparse_infill_density': ('process', 0, 100),
     'bridge_speed': ('process', 1, 300), 'initial_layer_speed': ('process', 1, 150),
     'top_surface_speed': ('process', 1, 400), 'wall_loops': ('process', 1, 10),
+    'outer_wall_acceleration': ('process', 0, 30000), 'inner_wall_acceleration': ('process', 0, 30000),
+    'top_surface_acceleration': ('process', 0, 30000), 'travel_acceleration': ('process', 0, 40000),
 }
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def without_connection_data(preset):
+    """Network credentials are irrelevant to slicing and must not enter browser saves."""
+    return {k: v for k, v in preset.items() if not any(part in k.lower() for part in
+            ('printhost', 'print_host', 'api_key', 'apikey', 'password', 'access_code', 'access_token'))}
 
 def resolve(name, catalog, stack=(), kind=None, scope=None):
     identity = (kind, scope, name)
@@ -93,7 +102,7 @@ def flatten(bundle, catalog=()):
         effective['inherits'] = ''
         for key in ('__sp_scope', 'include', 'includes', 'renamed_from'):
             effective.pop(key, None)
-        result[kind] = effective
+        result[kind] = without_connection_data(effective)
     validate_bundle(result)
     return result
 
@@ -142,7 +151,7 @@ def catalog_from_roots(roots, warnings=None):
                     warnings.append(f'{file.name}: {exc}')
     # Later roots win within a vendor/account namespace (OTA and user data).
     unique = {(p['type'], p['name'], p.get('__sp_scope')): p for p in profiles}
-    return list(unique.values())
+    return [without_connection_data(p) for p in unique.values()]
 
 def inspect_model(path):
     path = Path(path).resolve()
@@ -172,6 +181,28 @@ def inspect_model(path):
                         raise ValueError('3MF contains executable post-processing or plugins; export a clean model instead')
     return path
 
+def prepare_model(model_bytes, suffix, bundle):
+    """Normalize only the demonstrated inactive raft sentinel, in a private snapshot."""
+    notes = ['Complete project: all parts auto-arranged on one plate for each printer. Original plate placement is not retained.']
+    if suffix != '.3mf':
+        return model_bytes, notes
+    source = io.BytesIO(model_bytes)
+    dest = io.BytesIO()
+    with zipfile.ZipFile(source) as archive, zipfile.ZipFile(dest, 'w') as output:
+        for entry in archive.infolist():
+            data = archive.read(entry)
+            if entry.filename == 'Metadata/project_settings.config':
+                config = json.loads(data)
+                if str(config.get('raft_first_layer_expansion')) == '-1':
+                    if str(config.get('raft_layers', '0')) != '0' or str(bundle['process'].get('raft_layers', '0')) != '0':
+                        raise ValueError('Legacy raft expansion -1 requires review in OrcaSlicer when rafts are enabled.')
+                    config['raft_first_layer_expansion'] = '0'
+                    data = json.dumps(config).encode('utf-8')
+                    notes.append('Working copy only: inactive legacy raft expansion -1 normalized to 0; original project and geometry unchanged.')
+            output.writestr(entry, data)
+    return dest.getvalue(), notes
+
+
 class Engine:
     def __init__(self, executable, catalog=()):
         self.executable = str(Path(executable).resolve())
@@ -190,13 +221,14 @@ class Engine:
         if dll.is_file():
             engine_files.append(dll)
         fingerprint = digest([(f.name, f.stat().st_mtime_ns, f.stat().st_size) for f in engine_files])
-        key = digest([model_hash, settings_hash, self.executable, fingerprint])
+        key = digest(['snapshot-v2', model_hash, settings_hash, self.executable, fingerprint])
         if key in self.cache:
             return self.cache[key]
         with tempfile.TemporaryDirectory(prefix='speed-printer-') as temp:
             work = Path(temp)
             snapshot = work / ('model' + path.suffix.lower())
-            snapshot.write_bytes(model_bytes)
+            prepared, notes = prepare_model(model_bytes, path.suffix.lower(), bundle)
+            snapshot.write_bytes(prepared)
             inspect_model(snapshot)
             for kind, preset in bundle.items():
                 (work / f'{kind}.json').write_text(json.dumps(preset), encoding='utf-8')
@@ -209,7 +241,12 @@ class Engine:
                                  creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             if run.returncode:
                 # Logs may contain machine G-code or paths; keep response bounded.
-                raise ValueError(f'OrcaSlicer failed (exit {run.returncode}). Check profile compatibility and local Orca logs.')
+                logs = (run.stdout + run.stderr).decode('utf-8', errors='replace')
+                invalid = re.search(r'\b([a-z][a-z_]{2,80}):[^\r\n]{0,100}not in range', logs)
+                detail = f' Invalid setting: {invalid[1]}.' if invalid else ''
+                raise ValueError(f'OrcaSlicer failed (exit {run.returncode}).{detail} Review the selected profiles and project in OrcaSlicer.')
+            if b'Not precalculated Placeable areas' in run.stdout + run.stderr:
+                notes.append('Orca reported support-placement warnings. Review supports and toolpaths in Orca before printing; a completed slice does not certify support quality.')
             texts = [f.read_text(encoding='utf-8', errors='replace') for f in output.rglob('*.gcode')]
             if not texts:
                 for f in output.rglob('*.3mf'):
@@ -221,7 +258,8 @@ class Engine:
             if len(summaries) != 1:
                 raise ValueError('Use a single-plate project for a controlled comparison')
             result = {**summaries[0], 'modelHash': model_hash, 'settingsHash': settings_hash,
-                      'engine': Path(self.executable).name, 'engineFingerprint': fingerprint, 'verifiedAt': time.time()}
+                      'engine': Path(self.executable).name, 'engineFingerprint': fingerprint, 'verifiedAt': time.time(),
+                      'notes': notes, 'objectCount': sum(len(re.findall(r'^EXCLUDE_OBJECT_DEFINE\b', t, re.M)) for t in texts)}
             if len(self.cache) >= 128:
                 self.cache.pop(next(iter(self.cache)))
             if len(self.validated) >= 128:

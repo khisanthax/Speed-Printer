@@ -5,12 +5,34 @@ import tempfile
 import unittest
 import zipfile
 from unittest.mock import patch
-from core import Engine, catalog_from_roots, digest, flatten, install_presets, inspect_model, parse_gcode, resolve, validate_bundle
+from core import Engine, catalog_from_roots, digest, flatten, install_presets, inspect_model, parse_gcode, prepare_model, resolve, validate_bundle
+import io
 
 def bundle():
     return {k: {'type': k, 'name': k, 'inherits': ''} for k in ('machine','process','filament')}
 
 class IntegrationContractTests(unittest.TestCase):
+    def test_personal_project_inactive_raft_repair_preserves_geometry(self):
+        original = io.BytesIO()
+        with zipfile.ZipFile(original, 'w') as z:
+            z.writestr('Metadata/project_settings.config', json.dumps({'raft_layers':'0', 'raft_first_layer_expansion':'-1', 'wall_loops':'4'}))
+            z.writestr('3D/3dmodel.model', b'original geometry and placement')
+        data = original.getvalue()
+        fixed, notes = prepare_model(data, '.3mf', bundle())
+        with zipfile.ZipFile(io.BytesIO(fixed)) as z:
+            self.assertEqual(z.read('3D/3dmodel.model'), b'original geometry and placement')
+            self.assertEqual(json.loads(z.read('Metadata/project_settings.config')), {'raft_layers':'0', 'raft_first_layer_expansion':'0', 'wall_loops':'4'})
+        self.assertEqual(original.getvalue(), data)
+        self.assertIn('inactive legacy raft', notes[-1])
+        enabled=bundle(); enabled['process']['raft_layers']='1'
+        with self.assertRaisesRegex(ValueError,'rafts are enabled'): prepare_model(data,'.3mf',enabled)
+
+    def test_connection_credentials_do_not_reach_effective_presets(self):
+        b=bundle(); b['machine'].update(print_host='private', printhost_apikey='secret', machine_start_gcode='G28')
+        clean=flatten(b)
+        self.assertNotIn('printhost_apikey',clean['machine'])
+        self.assertNotIn('print_host',clean['machine'])
+        self.assertEqual(clean['machine']['machine_start_gcode'],'G28')
     def test_user_preset_kind_comes_from_its_directory(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp)

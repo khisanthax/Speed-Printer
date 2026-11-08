@@ -8,6 +8,8 @@ export type Summary = {
   source: string;
   modelHash: string;
   settingsHash: string;
+  notes?: string[];
+  objectCount?: number;
   breakdown?: Record<string, number>;
 };
 export const settings = [
@@ -34,6 +36,31 @@ export const settings = [
   ["initial_layer_speed", "First layer speed", "mm/s", "process", 1, 150],
   ["top_surface_speed", "Top surface speed", "mm/s", "process", 1, 400],
   ["wall_loops", "Wall loops", "", "process", 1, 10],
+  [
+    "outer_wall_acceleration",
+    "Outer wall acceleration",
+    "mm/s²",
+    "process",
+    0,
+    30000,
+  ],
+  [
+    "inner_wall_acceleration",
+    "Inner wall acceleration",
+    "mm/s²",
+    "process",
+    0,
+    30000,
+  ],
+  [
+    "top_surface_acceleration",
+    "Top surface acceleration",
+    "mm/s²",
+    "process",
+    0,
+    30000,
+  ],
+  ["travel_acceleration", "Travel acceleration", "mm/s²", "process", 0, 40000],
 ] as const;
 export function resolve(
   name: string,

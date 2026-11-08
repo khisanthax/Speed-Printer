@@ -24,6 +24,20 @@ test("approved columns, synchronized settings and honest empty summaries", async
     .locator(".settings-scroll")
     .evaluateAll((es) => es.map((e) => e.scrollTop));
   expect(new Set(positions).size).toBe(1);
+  await page.getByRole("checkbox", { name: "Supports enabled" }).uncheck();
+  await expect(
+    page.getByRole("checkbox", { name: "Supports enabled" }),
+  ).not.toBeChecked();
+  await page
+    .getByRole("button", { name: "Compare conditions", exact: true })
+    .click();
+  await expect(page.locator("#modal-content")).toContainText(
+    "cannot be attributed to printer speed alone",
+  );
+  await expect(page.locator("#modal-content")).toContainText(
+    "default_acceleration",
+  );
+  await page.getByRole("button", { name: "Close dialog" }).click();
   await page
     .getByRole("spinbutton", { name: "Outer wall speed value" })
     .fill("250");
