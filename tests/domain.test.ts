@@ -8,6 +8,24 @@ import {
   settings,
 } from "../src/domain";
 describe("Orca inheritance and tuning", () => {
+  it("resolves renamed parent presets used by older user files", () => {
+    const profiles = parseProfiles([
+      {
+        name: "Modern material",
+        type: "filament",
+        renamed_from: ["Legacy material"],
+        filament_type: ["PETG"],
+      },
+      {
+        name: "Personal material",
+        type: "filament",
+        inherits: "Legacy material",
+      },
+    ]);
+    expect(resolve("Personal material", profiles).filament_type).toEqual([
+      "PETG",
+    ]);
+  });
   it("resolves multi-generation inheritance without replacing inherited arrays", () => {
     const p = parseProfiles([
       {
@@ -64,8 +82,11 @@ describe("Orca inheritance and tuning", () => {
     );
     expect(b.filament.filament_max_volumetric_speed).toEqual(["30"]);
     expect(b.process.sparse_infill_density).toBe("20%");
-    b.filament.filament_max_volumetric_speed=['30','15'];
-    expect(changed(b,'filament_max_volumetric_speed',32).filament.filament_max_volumetric_speed).toEqual(['32','15']);
+    b.filament.filament_max_volumetric_speed = ["30", "15"];
+    expect(
+      changed(b, "filament_max_volumetric_speed", 32).filament
+        .filament_max_volumetric_speed,
+    ).toEqual(["32", "15"]);
   });
   it("recognizes zero acceleration and missing settings without invented defaults", () => {
     const b = demoBundle();
@@ -74,6 +95,6 @@ describe("Orca inheritance and tuning", () => {
     expect(numeric(b, settings[6])).toBeNull();
     expect(() => changed(b, "layer_height", 0)).toThrow();
     expect(() => changed(b, "travel_speed", NaN)).toThrow();
-    expect(()=>changed(b,'enable_support',.5)).toThrow();
+    expect(() => changed(b, "enable_support", 0.5)).toThrow();
   });
 });

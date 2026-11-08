@@ -53,3 +53,10 @@ Read this file before continuing work. Never commit private profiles, credential
 - Public tracked files were checked for actual credential/private-key patterns and known private printer endpoint; none were present. No user Orca profile was overwritten, no Home Assistant changes were made, and no printer control or print command was issued.
 - Milestones 1–9 delivered: public project, approved UI, comparison/import, actual slicing, controlled tuning, preset persistence/install, Print Lab, tests/security/Windows packaging/deployment, and end-to-end documentation.
 - Next user acceptance: install into the intended Orca account through its native confirmation flow and verify GUI selection; connect the SV08 Moonraker origin and future printers; conduct physical quality/safety tests and matched-job calibration. Slicing and read-only history do not prove these hardware outcomes.
+
+## 2026-11-08 — Personal profile loading follow-up
+- User explicitly requested starting the Windows helper, pairing the deployed app and loading their two printer profile bundles. Started the packaged helper and paired the deployed page; token remained in memory only.
+- Real saved user presets omit `type`, so discovery now infers kind from the containing machine/process/filament directory. Added an original synthetic fixture regression test.
+- Older saved filament presets may inherit former system names. Both resolvers now honor upstream `renamed_from` aliases when no exact parent exists, with regression coverage.
+- Native confirmation dialogs had an invisible owner window which automation could not target. The helper now displays a small titled owner while awaiting local confirmation, preserving explicit permission rather than bypassing it.
+- Six TypeScript tests, sixteen Python tests and the production build pass. Rebuilt the Windows helper locally; deploying the compatibility fixes before completing personal imports. Private presets and connection information remain outside tracked files.

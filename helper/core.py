@@ -33,6 +33,8 @@ def resolve(name, catalog, stack=(), kind=None, scope=None):
     if identity in stack:
         raise ValueError('Preset inheritance cycle: ' + name)
     matches = [p for p in catalog if p.get('name') == name and (not kind or p.get('type') == kind)]
+    if not matches:
+        matches = [p for p in catalog if name in (p.get('renamed_from', []) if isinstance(p.get('renamed_from', []), list) else [p['renamed_from']]) and (not kind or p.get('type') == kind)]
     local = [p for p in matches if scope and p.get('__sp_scope') == scope]
     if local:
         matches = local
@@ -120,6 +122,10 @@ def catalog_from_roots(roots, warnings=None):
                 continue
             try:
                 p = json.loads(file.read_text(encoding='utf-8-sig'))
+                if isinstance(p, dict) and not p.get('type'):
+                    parent_kinds = [part for part in file.relative_to(root).parts[:-1] if part in KINDS]
+                    if parent_kinds:
+                        p['type'] = parent_kinds[-1]
                 if isinstance(p, dict) and p.get('type') in KINDS and p.get('name'):
                     p['__sp_scope'] = file.relative_to(root).parts[0] if file.parent != root else root.name
                     profiles.append(p)

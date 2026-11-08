@@ -28,8 +28,11 @@ class LocalServer(ThreadingHTTPServer):
 def dialog(action):
     # Tk stays on its creating thread. Requests block until local permission resolves.
     root = tk.Tk()
-    root.withdraw()
+    root.title('Speed Printer Helper')
+    root.geometry('460x100')
+    tk.Label(root, text='Speed Printer is waiting for your local confirmation.\nYour profiles and models stay on this PC.', padx=20, pady=20).pack()
     root.attributes('-topmost', True)
+    root.update_idletasks()
     try:
         return action(root)
     finally:

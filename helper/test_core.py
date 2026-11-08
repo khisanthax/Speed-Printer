@@ -5,12 +5,25 @@ import tempfile
 import unittest
 import zipfile
 from unittest.mock import patch
-from core import Engine, digest, flatten, install_presets, inspect_model, parse_gcode, resolve, validate_bundle
+from core import Engine, catalog_from_roots, digest, flatten, install_presets, inspect_model, parse_gcode, resolve, validate_bundle
 
 def bundle():
     return {k: {'type': k, 'name': k, 'inherits': ''} for k in ('machine','process','filament')}
 
 class IntegrationContractTests(unittest.TestCase):
+    def test_user_preset_kind_comes_from_its_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            for kind in ('machine','process','filament'):
+                folder=root/'default'/kind;folder.mkdir(parents=True)
+                (folder/'Personal preset.json').write_text(json.dumps({'name':f'Personal {kind}','inherits':''}))
+            (root/'unrelated.json').write_text(json.dumps({'name':'Not a profile'}))
+            profiles=catalog_from_roots([root])
+            self.assertEqual({p['type'] for p in profiles},{'machine','process','filament'})
+            self.assertEqual(len(profiles),3)
+    def test_renamed_system_parent_remains_resolvable(self):
+        profiles=[{'name':'Modern material','type':'filament','renamed_from':['Legacy material'],'filament_type':['PETG']}, {'name':'Personal material','type':'filament','inherits':'Legacy material'}]
+        self.assertEqual(resolve('Personal material',profiles)['filament_type'],['PETG'])
     def test_inheritance_and_missing_parent(self):
         p = [{'name':'base','type':'process','outer_wall_speed':'100'}, {'name':'child','type':'process','inherits':'base'}]
         self.assertEqual(resolve('child',p)['outer_wall_speed'],'100')

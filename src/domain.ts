@@ -48,6 +48,15 @@ export function resolve(
   let matches = profiles.filter(
     (p) => p.name === name && (!kind || p.type === kind),
   );
+  if (!matches.length)
+    matches = profiles.filter(
+      (p) =>
+        (Array.isArray(p.renamed_from)
+          ? p.renamed_from
+          : [p.renamed_from]
+        ).includes(name) &&
+        (!kind || p.type === kind),
+    );
   const local = matches.filter((p) => scope && p.__sp_scope === scope);
   if (local.length) matches = local;
   if (matches.length !== 1)
