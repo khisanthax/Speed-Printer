@@ -162,7 +162,7 @@ function requireHelper() {
 }
 function profileInfo(i: number) {
   const b = i === 2 ? tuned : bundles[i];
-  if (i < 2 && library?.printers?.length) {
+  if (i < 2 && library?.printers?.length && b.machine.__sp_id) {
     const p = library.printers.find((p) => p.id === b.machine.__sp_id);
     const available = (kind: "process" | "filament") =>
       (p?.[kind] || []).filter((c) => {
@@ -683,6 +683,23 @@ async function install() {
           name: $<HTMLInputElement>("#install-name").value,
         },
       );
+      if (library?.imported) {
+        // Installed files have new identities. Track those sources rather than
+        // retaining the original printer's version tags on later experiments.
+        const refreshed = await helper
+          .call<Library>("/profiles", {})
+          .catch(() => undefined);
+        if (refreshed) acceptLibrary(refreshed);
+        for (const kind of ["machine", "process", "filament"] as const) {
+          const matches = (refreshed?.profiles || []).filter(
+            (p) => p.type === kind && p.name === result.bundle[kind].name,
+          );
+          if (matches.length === 1) {
+            result.bundle[kind].__sp_id = matches[0].__sp_id;
+            result.bundle[kind].__sp_hash = matches[0].__sp_hash;
+          }
+        }
+      }
       $<HTMLDialogElement>("#modal").close();
       if (JSON.stringify(tuned) === JSON.stringify(installing)) {
         tuned = result.bundle;
