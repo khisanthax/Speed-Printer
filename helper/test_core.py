@@ -24,6 +24,7 @@ class IntegrationContractTests(unittest.TestCase):
     def test_renamed_system_parent_remains_resolvable(self):
         profiles=[{'name':'Modern material','type':'filament','renamed_from':['Legacy material'],'filament_type':['PETG']}, {'name':'Personal material','type':'filament','inherits':'Legacy material'}]
         self.assertEqual(resolve('Personal material',profiles)['filament_type'],['PETG'])
+        self.assertNotIn('renamed_from',resolve('Personal material',profiles))
     def test_inheritance_and_missing_parent(self):
         p = [{'name':'base','type':'process','outer_wall_speed':'100'}, {'name':'child','type':'process','inherits':'base'}]
         self.assertEqual(resolve('child',p)['outer_wall_speed'],'100')

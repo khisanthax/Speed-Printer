@@ -53,7 +53,10 @@ def resolve(name, catalog, stack=(), kind=None, scope=None):
         raise ValueError('Invalid included presets')
     for item in includes:
         result = {**result, **resolve(item, catalog, context, p['type'], p.get('__sp_scope'))}
-    return {**result, **p}
+    result = {**result, **p}
+    if 'renamed_from' not in p:
+        result.pop('renamed_from', None)
+    return result
 
 def validate_bundle(bundle):
     if not isinstance(bundle, dict) or set(bundle) != set(KINDS):

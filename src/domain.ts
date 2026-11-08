@@ -78,7 +78,9 @@ export function resolve(
       ...parent,
       ...resolve(item, profiles, next, p.type, p.__sp_scope),
     };
-  return { ...parent, ...p };
+  const result = { ...parent, ...p };
+  if (!Object.hasOwn(p, "renamed_from")) delete result.renamed_from;
+  return result;
 }
 export function parseProfiles(raw: unknown): Profile[] {
   const values = Array.isArray(raw) ? raw : [raw];
