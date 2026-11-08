@@ -7,11 +7,47 @@ import zipfile
 from unittest.mock import patch
 from core import Engine, catalog_from_roots, digest, flatten, install_presets, inspect_model, parse_gcode, prepare_model, resolve, validate_bundle
 import io
+import subprocess
 
 def bundle():
     return {k: {'type': k, 'name': k, 'inherits': ''} for k in ('machine','process','filament')}
 
 class IntegrationContractTests(unittest.TestCase):
+    def test_export_is_verified_new_project_and_never_replaces_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);model=root/'part.stl';model.write_bytes(b'original model')
+            destination=root/'comparison.3mf'
+            engine=Engine(__file__)
+            b=bundle();b['process']['default_acceleration']='20000';b['machine']['machine_max_acceleration_extruding']=['10000']
+            def run(command, **kwargs):
+                output=Path(command[command.index('--outputdir')+1])
+                with zipfile.ZipFile(output/'sliced.3mf','w') as z:
+                    z.writestr('Metadata/plate_1.gcode','; estimated printing time (normal mode) = 1m 2s\nEXCLUDE_OBJECT_DEFINE NAME=part\n')
+                    z.writestr('3D/3dmodel.model',b'synthetic geometry')
+                return subprocess.CompletedProcess(command,0,b'',b'')
+            with patch('core.subprocess.run',side_effect=run):
+                result=engine.slice(b,model,destination)
+                original=destination.read_bytes()
+                self.assertEqual(result['seconds'],62)
+                self.assertEqual(result['objectCount'],1)
+                self.assertEqual(result['exportedProject'],'comparison.3mf')
+                self.assertTrue(any('exceeds configured extruding limit' in n for n in result['notes']))
+                with self.assertRaises(FileExistsError):engine.slice(b,model,destination)
+                self.assertEqual(destination.read_bytes(),original)
+            self.assertEqual(model.read_bytes(),b'original model')
+
+    def test_motion_limits_are_explicit_simulations(self):
+        b=bundle();b['machine'].update(machine_max_jerk_x=['10'],machine_max_jerk_y=['10'],machine_max_acceleration_extruding=['10000'])
+        target=copy.deepcopy(b);target['machine'].update(machine_max_jerk_x=['20'],machine_max_jerk_y=['20'],machine_max_acceleration_extruding=['20000'])
+        engine=Engine('unused')
+        def sliced(p, model):
+            fast=p['machine']['machine_max_jerk_x']==['20'];accel=p['machine']['machine_max_acceleration_extruding']==['20000']
+            return {'seconds':1000-100*fast-50*accel-20*(fast and accel)}
+        with patch.object(engine,'slice',side_effect=sliced):
+            result=engine.analyze(b,target,'unused',['xy_jerk_limits','extruding_acceleration_limit'])
+        self.assertTrue(all(e['simulationOnly'] for e in result['effects']))
+        self.assertEqual(result['combinedSeconds'],830)
+        self.assertEqual(b['machine']['machine_max_jerk_x'],['10'])
     def test_personal_project_inactive_raft_repair_preserves_geometry(self):
         original = io.BytesIO()
         with zipfile.ZipFile(original, 'w') as z:
@@ -94,6 +130,13 @@ class IntegrationContractTests(unittest.TestCase):
             with self.assertRaises(ValueError):install_presets(b,'Test preset',temp,{})
             paths=install_presets(b,'Test preset',temp,{digest(b):b})
             self.assertEqual(len(paths),3)
+            for path in paths:
+                preset=json.loads(Path(path).read_text())
+                self.assertEqual(Path(path).stem,preset['name'])
+            machine=json.loads(Path(paths[0]).read_text())
+            process=json.loads(Path(paths[1]).read_text())
+            self.assertEqual(machine['default_print_profile'],Path(paths[1]).stem)
+            self.assertEqual(process['compatible_printers'],[Path(paths[0]).stem])
             original=Path(paths[0]).read_bytes()
             with self.assertRaises(FileExistsError):install_presets(b,'Test preset',temp,{digest(b):b})
             self.assertEqual(Path(paths[0]).read_bytes(),original)
@@ -102,10 +145,10 @@ class IntegrationContractTests(unittest.TestCase):
     def test_partial_install_rolls_back(self):
         b=flatten(bundle())
         with tempfile.TemporaryDirectory() as temp:
-            folder=Path(temp)/'process';folder.mkdir();(folder/'New preset.json').write_text('original')
+            folder=Path(temp)/'process';folder.mkdir();(folder/'New preset - process.json').write_text('original')
             with self.assertRaises(FileExistsError):install_presets(b,'New preset',temp,{digest(b):b})
-            self.assertFalse((Path(temp)/'machine'/'New preset.json').exists())
-            self.assertEqual((folder/'New preset.json').read_text(),'original')
+            self.assertFalse((Path(temp)/'machine'/'New preset - machine.json').exists())
+            self.assertEqual((folder/'New preset - process.json').read_text(),'original')
 
     def test_controlled_analysis_reports_interactions(self):
         b=bundle();b['process'].update(outer_wall_speed='100',inner_wall_speed='100')

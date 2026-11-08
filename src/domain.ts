@@ -10,6 +10,7 @@ export type Summary = {
   settingsHash: string;
   notes?: string[];
   objectCount?: number;
+  exportedProject?: string;
   breakdown?: Record<string, number>;
 };
 export const settings = [

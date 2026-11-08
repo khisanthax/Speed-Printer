@@ -170,18 +170,25 @@ def handler_for(state):
                 state.engine.catalog = catalog_from_roots(state.roots, warnings)
                 return {'profiles': state.engine.catalog, 'warnings': warnings}
             if self.path == '/model':
-                path = dialog(lambda r: filedialog.askopenfilename(title='Select common model / single-plate project', filetypes=[('STL / 3MF', '*.stl *.3mf')], parent=r))
+                path = dialog(lambda r: filedialog.askopenfilename(title='Select common model / project (all parts auto-arranged)', filetypes=[('STL / 3MF', '*.stl *.3mf')], parent=r))
                 if not path:
                     raise ValueError('No model selected')
                 path = inspect_model(path)
                 ident = secrets.token_hex(16)
                 state.models[ident] = path
                 return {'id': ident, 'name': path.name}
-            if self.path in ('/slice', '/analyze'):
+            if self.path in ('/slice', '/analyze', '/export-project'):
                 if body.get('model') not in state.models:
                     raise ValueError('Select the common model in the local helper first')
                 model = state.models[body['model']]
                 bundle = flatten(body['bundle'], state.engine.catalog)
+                if self.path == '/export-project':
+                    path = dialog(lambda r: filedialog.asksaveasfilename(title='Export exact verified comparison project (new file only)', defaultextension='.3mf', filetypes=[('Orca project', '*.3mf')], initialfile='Speed Printer comparison.3mf', parent=r))
+                    if not path:
+                        raise ValueError('Project export cancelled')
+                    if Path(path).suffix.lower() != '.3mf' or Path(path).exists():
+                        raise ValueError('Choose a new .3mf filename; existing projects are never overwritten')
+                    return state.submit(lambda: state.engine.slice(bundle, model, path))
                 if self.path == '/slice':
                     return state.submit(lambda: state.engine.slice(bundle, model))
                 target = flatten(body['target'], state.engine.catalog)
@@ -195,7 +202,7 @@ def handler_for(state):
                 folder = dialog(lambda r: filedialog.askdirectory(title='Select Orca user account folder (contains machine / process / filament)', parent=r))
                 if not folder:
                     raise ValueError('No installation directory selected')
-                allowed = dialog(lambda r: messagebox.askyesno('Install new Orca presets?', f'Create three NEW profiles named {name!r} in:\n{folder}\n\nOriginal profiles will not be overwritten. Close OrcaSlicer first, then reopen after installation. Estimates do not establish hardware safety.', parent=r))
+                allowed = dialog(lambda r: messagebox.askyesno('Install new Orca presets?', f'Create three NEW profiles named {name!r} in:\n{folder}\n\nOriginal profiles will not be overwritten. Open a new Orca window afterward; keep unsaved projects open. Estimates do not establish hardware safety.', parent=r))
                 if not allowed:
                     raise ValueError('Local installation confirmation declined')
                 return {'installed': install_presets(bundle, name, folder, state.engine.validated)}

@@ -3,6 +3,7 @@ import { demoBundle } from "../src/domain";
 test("helper lifecycle ignores stale jobs and replaces estimates only on completion", async ({
   page,
 }) => {
+  test.setTimeout(60_000);
   let slices = 0;
   let releaseOldTuning = false;
   await page.route("http://127.0.0.1:8377/**", async (route) => {
@@ -19,6 +20,8 @@ test("helper lifecycle ignores stale jobs and replaces estimates only on complet
     if (path === "/health") result = { orcaFound: true };
     if (path === "/model") result = { id: "model", name: "test-cube.stl" };
     if (path === "/slice") result = { id: String(++slices) };
+    if (path === "/export-project") result = { id: "export" };
+    if (path === "/analyze") result = { id: "analysis" };
     if (path.startsWith("/jobs/")) {
       const id = path.split("/").pop();
       result =
@@ -35,6 +38,27 @@ test("helper lifecycle ignores stale jobs and replaces estimates only on complet
               },
             };
     }
+    if (path === "/jobs/export")
+      result = {
+        state: "complete",
+        result: { seconds: 120, exportedProject: "comparison.3mf" },
+      };
+    if (path === "/jobs/analysis")
+      result = {
+        state: "complete",
+        result: {
+          effects: [
+            {
+              key: "outer_wall_speed",
+              savedSeconds: 15,
+              conditionalSavedSeconds: 15,
+            },
+          ],
+          combinedSeconds: 105,
+          interactionResidualSeconds: 0,
+          method: "TEST ONLY synthetic analysis",
+        },
+      };
     await route.fulfill({
       contentType: "application/json",
       headers,
@@ -99,5 +123,50 @@ test("helper lifecycle ignores stale jobs and replaces estimates only on complet
   await page.waitForTimeout(600);
   await expect(page.locator("#summary-2 .time-metric strong")).toHaveText(
     "0 h 2 min",
+  );
+  await page.locator("#export-project").click();
+  await expect(page.locator("#toast")).toContainText(
+    "Verified project exported: comparison.3mf",
+  );
+  await page.locator('[data-import="1"]').click();
+  await page.locator("#manual-import").click();
+  const target = structuredClone(b);
+  for (const kind of ["machine", "process", "filament"] as const)
+    target[kind].name = `Target ${kind}`;
+  target.process.outer_wall_speed = "300";
+  await page
+    .locator("#file")
+    .setInputFiles({
+      name: "target.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(JSON.stringify(Object.values(target))),
+    });
+  for (const kind of ["machine", "process", "filament"])
+    await page
+      .locator(`#pick-${kind}`)
+      .selectOption({ label: `Target ${kind}` });
+  await page.locator("#apply-import").click();
+  await page.locator("#analyze").click();
+  await page.locator("#run-analysis").click();
+  await expect(page.locator("#analysis-result")).toContainText("15.0");
+  await page.locator("#apply-analysis").click();
+  await expect(page.locator("#number-outer_wall_speed")).toHaveValue("300");
+  await expect(page.locator("#summary-2")).toContainText(
+    "Verified local slice",
+  );
+  await page
+    .getByRole("button", { name: "Compare conditions", exact: true })
+    .click();
+  await page.locator("#common-process").click();
+  await expect(page.locator(".col-1 .profile-info")).toContainText(
+    "Fixture process",
+  );
+  await expect(page.locator("#summary-1 .time-metric strong")).toHaveText("—");
+  await page
+    .getByRole("button", { name: "Compare conditions", exact: true })
+    .click();
+  await page.locator("#restore-process").click();
+  await expect(page.locator(".col-1 .profile-info")).toContainText(
+    "Target process",
   );
 });

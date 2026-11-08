@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -26,6 +27,10 @@ RANGES = {
     'top_surface_speed': ('process', 1, 400), 'wall_loops': ('process', 1, 10),
     'outer_wall_acceleration': ('process', 0, 30000), 'inner_wall_acceleration': ('process', 0, 30000),
     'top_surface_acceleration': ('process', 0, 30000), 'travel_acceleration': ('process', 0, 40000),
+}
+ANALYSIS_GROUPS = {
+    'xy_jerk_limits': ('machine_max_jerk_x', 'machine_max_jerk_y'),
+    'extruding_acceleration_limit': ('machine_max_acceleration_extruding',),
 }
 
 def digest(value):
@@ -210,7 +215,7 @@ class Engine:
         self.cache = {}
         self.validated = {}
 
-    def slice(self, bundle, model):
+    def slice(self, bundle, model, export_path=None):
         bundle = flatten(bundle, self.catalog)
         path = inspect_model(model)
         model_bytes = path.read_bytes()
@@ -222,12 +227,24 @@ class Engine:
             engine_files.append(dll)
         fingerprint = digest([(f.name, f.stat().st_mtime_ns, f.stat().st_size) for f in engine_files])
         key = digest(['snapshot-v2', model_hash, settings_hash, self.executable, fingerprint])
-        if key in self.cache:
+        if key in self.cache and export_path is None:
             return self.cache[key]
         with tempfile.TemporaryDirectory(prefix='speed-printer-') as temp:
             work = Path(temp)
             snapshot = work / ('model' + path.suffix.lower())
             prepared, notes = prepare_model(model_bytes, path.suffix.lower(), bundle)
+            def scalar(preset, key):
+                value = preset.get(key)
+                if isinstance(value, list):
+                    value = value[0] if value else None
+                try:
+                    return float(value)
+                except (ValueError, TypeError):
+                    return None
+            requested = scalar(bundle['process'], 'default_acceleration')
+            cap = scalar(bundle['machine'], 'machine_max_acceleration_extruding')
+            if requested is not None and cap is not None and requested > cap > 0:
+                notes.append(f'Requested default acceleration {requested:g} exceeds configured extruding limit {cap:g} mm/s². Review machine limits; the requested value alone does not establish actual acceleration.')
             snapshot.write_bytes(prepared)
             inspect_model(snapshot)
             for kind, preset in bundle.items():
@@ -260,6 +277,21 @@ class Engine:
             result = {**summaries[0], 'modelHash': model_hash, 'settingsHash': settings_hash,
                       'engine': Path(self.executable).name, 'engineFingerprint': fingerprint, 'verifiedAt': time.time(),
                       'notes': notes, 'objectCount': sum(len(re.findall(r'^EXCLUDE_OBJECT_DEFINE\b', t, re.M)) for t in texts)}
+            if export_path is not None:
+                project = output / 'sliced.3mf'
+                if not project.is_file():
+                    raise ValueError('Orca did not export a comparison project')
+                destination = Path(export_path)
+                # Native-selected destination, new files only. Never replace an original.
+                with destination.open('xb') as saved:
+                    try:
+                        with project.open('rb') as source:
+                            shutil.copyfileobj(source, saved)
+                    except Exception:
+                        saved.close()
+                        destination.unlink(missing_ok=True)
+                        raise
+                result = {**result, 'exportedProject': destination.name}
             if len(self.cache) >= 128:
                 self.cache.pop(next(iter(self.cache)))
             if len(self.validated) >= 128:
@@ -273,22 +305,31 @@ class Engine:
         base = self.slice(bundle, model)
         current = copy.deepcopy(bundle)
         effects = []
-        for key in keys:
-            if key not in RANGES:
+        def substitute(trial, key):
+            if key in ANALYSIS_GROUPS:
+                for field in ANALYSIS_GROUPS[key]:
+                    if field not in target['machine']:
+                        raise ValueError(f'Target does not provide {field}')
+                    trial['machine'][field] = copy.deepcopy(target['machine'][field])
+            elif key in RANGES:
+                kind = RANGES[key][0]
+                if key not in target[kind]:
+                    return False
+                trial[kind][key] = copy.deepcopy(target[kind][key])
+            else:
                 raise ValueError('Unsupported analysis setting')
-            kind = RANGES[key][0]
-            if key not in target[kind]:
-                continue
+            return True
+        for key in keys:
             trial = copy.deepcopy(bundle)
-            trial[kind][key] = target[kind][key]
+            if not substitute(trial, key):
+                continue
             result = self.slice(trial, model)
-            effects.append({'key': key, 'savedSeconds': base['seconds'] - result['seconds']})
+            effects.append({'key': key, 'savedSeconds': base['seconds'] - result['seconds'], 'simulationOnly': key in ANALYSIS_GROUPS})
         effects.sort(key=lambda e: e['savedSeconds'], reverse=True)
         previous = base['seconds']
         for effect in effects:
             key = effect['key']
-            kind = RANGES[key][0]
-            current[kind][key] = target[kind][key]
+            substitute(current, key)
             combined = self.slice(current, model)
             effect['conditionalSavedSeconds'] = previous - combined['seconds']
             previous = combined['seconds']
@@ -323,7 +364,8 @@ def install_presets(bundle, name, directory, validated_hashes):
             p[id_key] = [p['name']] if kind == 'filament' else p['name']
             if kind == 'filament':
                 p['filament_id'] = 'SP' + digest([name, bundle])[:8]
-            path = folder / f'{name}.json'
+            # Orca uses the filename stem as the preset identity during disk discovery.
+            path = folder / f'{p["name"]}.json'
             with path.open('x', encoding='utf-8') as f:
                 created.append(path)
                 json.dump(p, f, indent=2)

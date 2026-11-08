@@ -74,6 +74,20 @@ conditionsButton.textContent = "Compare conditions";
 $(".workspace-status").append(conditionsButton);
 conditionsButton.onclick = conditionsDialog;
 function conditionsDialog() {
+  const important = [
+    "enable_support",
+    "wall_loops",
+    "layer_height",
+    "filament_max_volumetric_speed",
+    "slow_down_layer_time",
+    "default_acceleration",
+  ];
+  const conditions = important
+    .map((key) => {
+      const setting = settings.find((s) => s[0] === key)!;
+      return `<tr><td>${setting[1]}</td>${bundles.map((b) => `<td>${escape(display(b, setting))}</td>`).join("")}</tr>`;
+    })
+    .join("");
   const differences = (["machine", "process", "filament"] as const).flatMap(
     (kind) =>
       [
@@ -95,7 +109,7 @@ function conditionsDialog() {
         ),
   );
   modal(
-    `<h2>Comparison conditions</h2><p>Saved profiles compare complete recipes, including supports, quality, cooling, flow limits and machine constraints. The difference in total time cannot be attributed to printer speed alone.</p><p>Common-process mode uses A’s entire process on both printers, retaining each machine and calibrated filament. Filament and machine differences still matter. All project parts are auto-arranged on one plate; placement may differ by bed size. Embedded object settings remain part of the common project.</p><div class="actions"><button id="common-process">Use A’s process on both</button><button id="restore-process">Restore imported processes</button></div><table><thead><tr><th>Effective setting</th><th>A</th><th>B</th></tr></thead><tbody>${differences.join("")}</tbody></table>`,
+    `<h2>Comparison conditions</h2><table><thead><tr><th>Condition</th><th>A</th><th>B</th></tr></thead><tbody>${conditions}</tbody></table><p>Saved profiles compare complete recipes, including supports, quality, cooling, flow limits and machine constraints. The difference in total time cannot be attributed to printer speed alone.</p><p>Common-process mode uses A’s entire process on both printers, retaining each machine and calibrated filament. Filament and machine differences still matter. All project parts are auto-arranged on one plate; placement may differ by bed size. Embedded object settings remain part of the common project.</p><div class="actions"><button id="common-process">Use A’s process on both</button><button id="restore-process">Restore imported processes</button></div><table><thead><tr><th>Effective setting</th><th>A</th><th>B</th></tr></thead><tbody>${differences.join("")}</tbody></table>`,
   );
   const apply = () => {
     summaries = [undefined, undefined, undefined];
@@ -160,7 +174,7 @@ function summary(i: number) {
   const s = summaries[i];
   const b = summaries[1 - selected];
   const pct = s && b ? (s.seconds / b.seconds - 1) * 100 : undefined;
-  return `<div class="section-title"><h2><span>▥</span> ${i === 2 ? "Live Summary" : "Summary"}</h2>${i === 2 ? '<button class="small" id="reslice">↻ Re-slice</button>' : `<span class="chip">${s ? "OrcaSlicer result" : "Awaiting slice"}</span>`}</div><div class="time-metric"><span>◷ &nbsp; Estimated print time</span><strong>${duration(s?.seconds)}</strong></div><div class="metric"><span>▤ &nbsp; Filament used</span><strong>${s?.grams === undefined ? "Not provided" : s.grams.toFixed(2) + " g"}</strong><small>${s?.meters === undefined ? "" : s.meters.toFixed(2) + " m"}</small></div><div class="metric"><span>♧ &nbsp; Support material</span><strong>Not separately provided</strong></div><div class="metric"><span>⌁ &nbsp; Travel / feature breakdown</span><strong>Not provided by engine</strong></div><div class="result-status ${states[i].includes("Stale") ? "stale" : ""}">${escape(states[i])}${pct === undefined ? "" : ` · ${pct > 0 ? "+" : ""}${pct.toFixed(1)}% vs target`}</div>${i === 2 ? `<div class="safety">Faster estimates do not establish safe hardware limits.</div><div class="actions"><button id="reset">↶ Reset</button><button id="save">♧ Save Preset</button><button id="install" class="primary">♙ Install in OrcaSlicer</button></div>` : `<button data-slice="${i}" class="slice">Slice ${i === 0 ? "current" : "target"} profile</button><small class="source">${s ? escape(s.source) + (s.objectCount ? ` · ${s.objectCount} objects` : "") + (s.notes?.length ? `<details><summary>Project scope / compatibility</summary>${s.notes.map((note) => `<p>${escape(note)}</p>`).join("")}</details>` : "") : "Real estimates appear after local slicing completes."}</small>`}`;
+  return `<div class="section-title"><h2><span>▥</span> ${i === 2 ? "Live Summary" : "Summary"}</h2>${i === 2 ? '<div><button class="small" id="export-project">Export 3MF</button><button class="small" id="reslice">↻ Re-slice</button></div>' : `<span class="chip">${s ? "OrcaSlicer result" : "Awaiting slice"}</span>`}</div><div class="time-metric"><span>◷ &nbsp; Estimated print time</span><strong>${duration(s?.seconds)}</strong>${s ? `<small>${s.seconds.toLocaleString()} s · exact engine estimate</small>` : ""}</div><div class="metric"><span>▤ &nbsp; Filament used</span><strong>${s?.grams === undefined ? "Not provided" : s.grams.toFixed(2) + " g"}</strong><small>${s?.meters === undefined ? "" : s.meters.toFixed(2) + " m"}</small></div><div class="metric"><span>♧ &nbsp; Support material</span><strong>Not separately provided</strong></div><div class="metric"><span>⌁ &nbsp; Travel / feature breakdown</span><strong>Not provided by engine</strong></div><div class="result-status ${states[i].includes("Stale") ? "stale" : ""}">${escape(states[i])}${pct === undefined ? "" : ` · ${pct > 0 ? "+" : ""}${pct.toFixed(1)}% vs target`}</div>${i === 2 ? `<div class="safety">Faster estimates do not establish safe hardware limits.</div><div class="actions"><button id="reset">↶ Reset</button><button id="save">♧ Save Preset</button><button id="install" class="primary">♙ Install in OrcaSlicer</button></div>` : `<button data-slice="${i}" class="slice">Slice ${i === 0 ? "current" : "target"} profile</button><small class="source">${s ? escape(s.source) + (s.objectCount ? ` · ${s.objectCount} objects` : "") + (s.notes?.length ? `<details><summary>Project scope / compatibility</summary>${s.notes.map((note) => `<p>${escape(note)}</p>`).join("")}</details>` : "") : "Real estimates appear after local slicing completes."}</small>`}`;
 }
 function renderCompare() {
   const scroll = $<HTMLElement>(".settings-scroll")?.scrollTop || 0;
@@ -238,6 +252,7 @@ function renderCompare() {
     renderCompare();
   };
   $("#reslice").onclick = () => void slice(2);
+  $("#export-project").onclick = () => void exportProject();
   $("#save").onclick = savePreset;
   $("#install").onclick = () => void install();
   $("#analyze").onclick = analysisDialog;
@@ -257,6 +272,7 @@ function updateSummaries() {
     renderCompare();
   };
   $("#reslice").onclick = () => void slice(2);
+  $("#export-project").onclick = () => void exportProject();
   $("#save").onclick = savePreset;
   $("#install").onclick = () => void install();
 }
@@ -435,6 +451,28 @@ function savePreset() {
     }
   };
 }
+async function exportProject() {
+  if (!requireHelper()) return;
+  if (!model || tunedDemo || !states[2].startsWith("Verified")) {
+    notify("Verify the current tuned profile before exporting its project.");
+    return;
+  }
+  try {
+    const job = await helper.call<{ id: string }>("/export-project", {
+      bundle: structuredClone(tuned),
+      model,
+    });
+    notify(
+      "Export queued. Orca will re-slice the exact comparison arrangement locally.",
+    );
+    const result = await waitJob(job.id);
+    notify(
+      `Verified project exported: ${result.exportedProject}. Open it in Orca to retain the comparison arrangement.`,
+    );
+  } catch (e) {
+    notify(String(e));
+  }
+}
 async function install() {
   if (!requireHelper()) return;
   if (!states[2].startsWith("Verified")) {
@@ -459,6 +497,13 @@ async function install() {
     }
   };
 }
+const motionExperiments = [
+  ["xy_jerk_limits", "X/Y jerk limits · simulation only"],
+  [
+    "extruding_acceleration_limit",
+    "Extruding acceleration cap · simulation only",
+  ],
+] as const;
 function analysisDialog() {
   if (!requireHelper()) return;
   if (!model || isDemo.some(Boolean)) {
@@ -466,7 +511,7 @@ function analysisDialog() {
     return;
   }
   modal(
-    `<h2>Controlled speed analysis</h2><p>Re-slice each setting toward the other printer, then re-slice the cumulative ranked combination. This measures model-specific effects and order-dependent interactions. Orca enforces profile constraints; hardware safety still requires validation.</p><div class="analysis-keys">${settings.map((s, i) => `<label><input type="checkbox" value="${s[0]}" ${i < 6 ? "checked" : ""}>${s[1]}${["layer_height", "line_width", "enable_support", "fan_max_speed", "slow_down_layer_time", "sparse_infill_density", "wall_loops"].includes(s[0]) ? " · changes quality / cooling" : ""}</label>`).join("")}</div><button id="run-analysis" class="primary">Run controlled re-slicing</button><div id="analysis-result" role="status"></div>`,
+    `<h2>Controlled speed analysis</h2><p>Re-slice each setting toward the other printer, then re-slice the cumulative ranked combination. This measures model-specific effects and order-dependent interactions. Orca enforces profile constraints; hardware safety still requires validation.</p><div class="analysis-keys">${settings.map((s, i) => `<label><input type="checkbox" value="${s[0]}" ${i < 6 ? "checked" : ""}>${s[1]}${["layer_height", "line_width", "enable_support", "fan_max_speed", "slow_down_layer_time", "sparse_infill_density", "wall_loops"].includes(s[0]) ? " · changes quality / cooling" : ""}</label>`).join("")}${motionExperiments.map(([key, label]) => `<label><input type="checkbox" value="${key}">${label}</label>`).join("")}</div><p>Motion-limit experiments simulate target slicer limits without changing firmware. They cannot be applied or installed from this dialog; estimates do not prove safe hardware limits.</p><button id="run-analysis" class="primary">Run controlled re-slicing</button><div id="analysis-result" role="status"></div>`,
   );
   $("#run-analysis").onclick = async () => {
     const keys = [
@@ -497,6 +542,7 @@ function analysisDialog() {
           key: string;
           savedSeconds: number;
           conditionalSavedSeconds: number;
+          simulationOnly?: boolean;
         }[];
         interactionResidualSeconds: number;
         method: string;
@@ -504,7 +550,7 @@ function analysisDialog() {
       };
       if (!runButton.isConnected) return;
       $("#analysis-result").innerHTML =
-        `<table><thead><tr><th>Setting</th><th>Alone: seconds saved</th><th>After prior changes</th></tr></thead><tbody>${r.effects.map((e) => `<tr><td>${escape(settings.find((s) => s[0] === e.key)?.[1] || e.key)}</td><td>${e.savedSeconds.toFixed(1)}</td><td>${e.conditionalSavedSeconds.toFixed(1)}</td></tr>`).join("")}</tbody></table><p>Combined estimate: ${duration(r.combinedSeconds)}. Interaction residual: ${r.interactionResidualSeconds.toFixed(1)} seconds. Negative savings mean slower. These substitutions explain only their measured effects; untested machine, quality and project settings may explain the remaining gap.</p><button id="apply-analysis">Apply analyzed combination and verify</button><small>${escape(r.method)}</small>`;
+        `<table><thead><tr><th>Setting</th><th>Alone: seconds saved</th><th>After prior changes</th></tr></thead><tbody>${r.effects.map((e) => `<tr><td>${escape(settings.find((s) => s[0] === e.key)?.[1] || motionExperiments.find((s) => s[0] === e.key)?.[1] || e.key)}</td><td>${e.savedSeconds.toFixed(1)}</td><td>${e.conditionalSavedSeconds.toFixed(1)}</td></tr>`).join("")}</tbody></table><p>Combined estimate: ${duration(r.combinedSeconds)}. Interaction residual: ${r.interactionResidualSeconds.toFixed(1)} seconds. Negative savings mean slower. These substitutions explain only their measured effects; untested machine, quality and project settings may explain the remaining gap.</p><button id="apply-analysis" ${r.effects.some((e) => e.simulationOnly) ? "disabled" : ""}>Apply analyzed combination and verify</button><small>${escape(r.method)}</small>`;
       $("#apply-analysis").onclick = () => {
         if (
           model !== analysisModel ||
@@ -607,7 +653,7 @@ function renderPresets() {
             else exported.filament_settings_id = [exported.name];
           }
           $(`[data-export-kind="${k}"]`).onclick = () =>
-            download(`Speed-Printer-${k}.json`, exported);
+            download(`${exported.name}.json`, exported);
         });
       }),
   );

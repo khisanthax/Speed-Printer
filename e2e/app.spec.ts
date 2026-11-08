@@ -63,7 +63,7 @@ test("save and load experiments and print lab missing-data states", async ({
       page.waitForEvent("download"),
       page.locator(`[data-export-kind="${kind}"]`).click(),
     ]);
-    expect(file.suggestedFilename()).toBe(`Speed-Printer-${kind}.json`);
+    expect(file.suggestedFilename()).toBe(`Test experiment - ${kind}.json`);
     const stream = await file.createReadStream();
     let content = "";
     for await (const chunk of stream!) content += chunk.toString();
