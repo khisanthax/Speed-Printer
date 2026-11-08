@@ -43,6 +43,22 @@ test("save and load experiments and print lab missing-data states", async ({
     .getByRole("button", { name: "Saved Presets", exact: false })
     .click();
   await expect(page.locator(".saved-card")).toContainText("Test experiment");
+  await page.getByRole("button", { name: "Export JSON", exact: true }).click();
+  for (const kind of ["machine", "process", "filament"]) {
+    const [file] = await Promise.all([
+      page.waitForEvent("download"),
+      page.locator(`[data-export-kind="${kind}"]`).click(),
+    ]);
+    expect(file.suggestedFilename()).toBe(`Speed-Printer-${kind}.json`);
+    const stream = await file.createReadStream();
+    let content = "";
+    for await (const chunk of stream!) content += chunk.toString();
+    const profile = JSON.parse(content);
+    expect(profile.name).toBe(`Test experiment - ${kind}`);
+    expect(profile.inherits).toBe("");
+    expect(profile.from).toBe("User");
+  }
+  await page.getByRole("button", { name: "Close dialog" }).click();
   await page.getByRole("button", { name: "Load", exact: true }).click();
   await expect(page.locator("#summary-2")).toContainText("re-slice required");
   await page.getByRole("button", { name: "Print Lab", exact: false }).click();
