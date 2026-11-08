@@ -499,6 +499,8 @@ select {
   letter-spacing: -1px;
   white-space: nowrap;
 }
+.time-value { text-align: right; flex-shrink: 0; }
+.time-value small { display: block; font-size: 9px; color: #596785; }
 .metric {
   display: flex;
   align-items: center;
