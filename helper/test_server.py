@@ -4,13 +4,13 @@ from http.server import ThreadingHTTPServer
 import json
 import threading
 import unittest
-from server import State, handler_for, moon_read
+from server import State, LocalServer, handler_for, moon_read
 
 class SecurityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.state=State(argparse.Namespace(orca='missing',origin=['http://127.0.0.1:5173']))
-        cls.server=ThreadingHTTPServer(('127.0.0.1',0),handler_for(cls.state))
+        cls.server=LocalServer(('127.0.0.1',0),handler_for(cls.state))
         threading.Thread(target=cls.server.serve_forever,daemon=True).start()
     @classmethod
     def tearDownClass(cls):cls.server.shutdown();cls.server.server_close();cls.state.pool.shutdown()
@@ -27,6 +27,10 @@ class SecurityTests(unittest.TestCase):
     def test_preflight_restricts_origins(self):
         self.assertEqual(self.request(method='OPTIONS'),204)
         self.assertEqual(self.request(method='OPTIONS',origin='https://evil.example'),403)
+    def test_only_one_helper_can_own_a_port(self):
+        with self.assertRaises(OSError):
+            duplicate=LocalServer(self.server.server_address,handler_for(self.state))
+            duplicate.server_close()
     def test_moonraker_cannot_proxy_arbitrary_routes(self):
         with self.assertRaises(ValueError):moon_read('http://127.0.0.1:8377','/server/history/list?limit=100&order=desc')
         with self.assertRaises(ValueError):moon_read('http://169.254.169.254','/server/history/list?limit=100&order=desc')

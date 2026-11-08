@@ -36,7 +36,7 @@ Browser local-network permissions may be required for the hosted site to reach t
 
 ## Import, inheritance and manual fallback
 
-Orca presets reference named parents. Both browser and helper resolve inheritance recursively, detect missing/ambiguous parents and cycles, and retain arrays and percentage values. Unknown or absent values are shown as missing. Engine defaults not explicitly present in exported profiles are applied by Orca during slicing; the comparison table does not pretend to enumerate all version-specific defaults.
+Orca presets reference named parents. Both browser and helper resolve inheritance and includes recursively within vendor namespaces, detect missing/ambiguous parents and cycles, and retain arrays and percentage values. System discovery supports JSON and Orca binary `.opc` cache format 2, including CRC validation; unsupported/corrupt caches produce warnings and require JSON export fallback. Unknown or absent values are shown as missing. Relative percentages retain their meaning and are not mislabeled as absolute speeds. Tuning array values changes the first filament/extruder entry and preserves other entries. Engine defaults not explicitly present in exported profiles are applied by Orca during slicing; the comparison table does not pretend to enumerate all version-specific defaults.
 
 Standard roots are `%APPDATA%\OrcaSlicer\system`, `%APPDATA%\OrcaSlicer\user`, and `resources\profiles` beside the selected executable. Portable roots are explicitly chosen by the local user. Account directories generally live under `user\<account-id>` or `user\default`; select the folder containing `machine`, `process`, and `filament` when installing. The helper never selects an account silently.
 
@@ -54,7 +54,7 @@ Acceleration `0` is labeled firmware controlled where supported. Slicer machine 
 
 Choose Mercury One, Mercury Two, SV08 or another printer, enter its LAN Moonraker origin, and optionally supply an API key. The helper only reads job history and Klipper toolhead/config limits. Keys are not stored. History is kept in memory, not sent to hosting or committed.
 
-Compare print duration, total duration, estimated duration, consumed filament and outcome. Only completed jobs with an estimate have an estimate error. Missing metadata stays missing; cancelled jobs are not treated as successful timing samples. Enter a verified model identity and conditions (material, nozzle, scale, quality and overrides) before treating jobs as comparable. Filenames alone do not establish equivalence. History may lack historical profile settings, overrides or time breakdowns; current Klipper settings cannot reconstruct them.
+Compare print duration, total duration, estimated duration, consumed filament and outcome. Only completed jobs with an estimate have an estimate error. Missing metadata stays missing; cancelled jobs are not treated as successful timing samples. History requests return unfiltered recent jobs: explicitly select equivalent completed jobs from at least two printers, enter a verified model identity and conditions (material, nozzle, scale, quality and overrides), then compare the selected cohort. Filenames alone do not establish equivalence. History may lack historical profile settings, overrides or time breakdowns; current Klipper settings cannot reconstruct them. Use a numeric private LAN IP and the actual Moonraker port; some multi-instance hosts use nonstandard ports. Hostnames are disabled to prevent DNS rebinding.
 
 ## Development and verification
 
@@ -64,6 +64,11 @@ npm test
 npx playwright install chromium
 npm run test:e2e
 python -m unittest discover -s helper -p "test_*.py" -v
+# Optional: real local engine, bundled public presets, generated cube, temporary install:
+python helper/smoke_orca.py --orca "C:\Program Files\OrcaSlicer\orca-slicer.exe"
+# Optional browser-to-engine test, reads only bundled public presets:
+$env:SPEED_PRINTER_LIVE_ORCA = "C:\Program Files\OrcaSlicer\orca-slicer.exe"
+npm run test:e2e -- e2e/live-orca.spec.ts
 ```
 
 CI tests the client in Chromium and Python helper on Windows and packages the companion with PyInstaller. GitHub Pages deploys static output from `main`. No Orca binaries are redistributed. See [ARCHITECTURE.md](ARCHITECTURE.md) and [LOGBOOK.md](LOGBOOK.md) for contracts, verification results and remaining integration limits.

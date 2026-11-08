@@ -173,19 +173,27 @@ class Engine:
     def slice(self, bundle, model):
         bundle = flatten(bundle, self.catalog)
         path = inspect_model(model)
-        model_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        model_bytes = path.read_bytes()
+        model_hash = hashlib.sha256(model_bytes).hexdigest()
         settings_hash = digest(bundle)
-        engine_stat = Path(self.executable).stat()
-        key = digest([model_hash, settings_hash, self.executable, engine_stat.st_mtime_ns, engine_stat.st_size])
+        engine_files = [Path(self.executable)]
+        dll = Path(self.executable).with_name('OrcaSlicer.dll')
+        if dll.is_file():
+            engine_files.append(dll)
+        fingerprint = digest([(f.name, f.stat().st_mtime_ns, f.stat().st_size) for f in engine_files])
+        key = digest([model_hash, settings_hash, self.executable, fingerprint])
         if key in self.cache:
             return self.cache[key]
         with tempfile.TemporaryDirectory(prefix='speed-printer-') as temp:
             work = Path(temp)
+            snapshot = work / ('model' + path.suffix.lower())
+            snapshot.write_bytes(model_bytes)
+            inspect_model(snapshot)
             for kind, preset in bundle.items():
                 (work / f'{kind}.json').write_text(json.dumps(preset), encoding='utf-8')
             output = work / 'output'
             output.mkdir()
-            command = [self.executable, str(path), '--load-settings', f'{work / "machine.json"};{work / "process.json"}',
+            command = [self.executable, str(snapshot), '--load-settings', f'{work / "machine.json"};{work / "process.json"}',
                        '--load-filaments', str(work / 'filament.json'), '--arrange', '1', '--slice', '0',
                        '--outputdir', str(output), '--export-3mf', 'sliced.3mf']
             run = subprocess.run(command, cwd=work, capture_output=True, timeout=300,
@@ -204,7 +212,11 @@ class Engine:
             if len(summaries) != 1:
                 raise ValueError('Use a single-plate project for a controlled comparison')
             result = {**summaries[0], 'modelHash': model_hash, 'settingsHash': settings_hash,
-                      'engine': Path(self.executable).name, 'verifiedAt': time.time()}
+                      'engine': Path(self.executable).name, 'engineFingerprint': fingerprint, 'verifiedAt': time.time()}
+            if len(self.cache) >= 128:
+                self.cache.pop(next(iter(self.cache)))
+            if len(self.validated) >= 128:
+                self.validated.pop(next(iter(self.validated)))
             self.cache[key] = result
             self.validated[settings_hash] = bundle
             return result

@@ -1,4 +1,26 @@
-.column{min-height:0}
-.printer-shot{width:45%;max-width:170px;min-width:120px;height:143px;flex-shrink:0;background-image:url('./approved-mockup.png');background-repeat:no-repeat;background-size:1672px 941px;background-position:-268px -169px;border-radius:7px}
-.printer-shot.sv08{background-position:-710px -169px}
-@media(max-height:800px){.printer-shot{transform:scale(.85);transform-origin:center;width:40%;min-width:100px}}
+.column {
+  min-height: 0;
+}
+.printer-shot {
+  width: 45%;
+  max-width: 170px;
+  min-width: 120px;
+  height: 143px;
+  flex-shrink: 0;
+  background-image: url("./approved-mockup.png");
+  background-repeat: no-repeat;
+  background-size: 1672px 941px;
+  background-position: -268px -169px;
+  border-radius: 7px;
+}
+.printer-shot.sv08 {
+  background-position: -710px -169px;
+}
+@media (max-height: 800px) {
+  .printer-shot {
+    transform: scale(0.85);
+    transform-origin: center;
+    width: 40%;
+    min-width: 100px;
+  }
+}

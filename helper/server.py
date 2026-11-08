@@ -17,6 +17,14 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 from core import Engine, catalog_from_roots, flatten, install_presets, inspect_model
 
+class LocalServer(ThreadingHTTPServer):
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
 def dialog(action):
     # Tk stays on its creating thread. Requests block until local permission resolves.
     root = tk.Tk()
@@ -69,6 +77,10 @@ class State:
         if sum(j['state'] in ('pending', 'running') for j in self.jobs.values()) >= 4:
             raise ValueError('Job queue full; wait for slicing to complete')
         ident = secrets.token_hex(12)
+        if len(self.jobs) >= 256:
+            completed = next((key for key, job in self.jobs.items() if job['state'] in ('complete', 'failed')), None)
+            if completed:
+                del self.jobs[completed]
         self.jobs[ident] = {'state': 'pending'}
         def run():
             self.jobs[ident] = {'state': 'running'}
@@ -200,7 +212,7 @@ def main():
     print('Allowed origins: ' + ', '.join(sorted(state.origins)), flush=True)
     print('Pairing token (session only; paste into Settings): ' + state.token, flush=True)
     print('Press Ctrl+C to revoke the token and stop.', flush=True)
-    ThreadingHTTPServer(('127.0.0.1', 8377), handler_for(state)).serve_forever()
+    LocalServer(('127.0.0.1', 8377), handler_for(state)).serve_forever()
 
 if __name__ == '__main__':
     main()
