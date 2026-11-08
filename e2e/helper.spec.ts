@@ -4,6 +4,7 @@ test("helper lifecycle ignores stale jobs and replaces estimates only on complet
   page,
 }) => {
   let slices = 0;
+  let releaseOldTuning = false;
   await page.route("http://127.0.0.1:8377/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     const headers = {
@@ -21,7 +22,7 @@ test("helper lifecycle ignores stale jobs and replaces estimates only on complet
     if (path.startsWith("/jobs/")) {
       const id = path.split("/").pop();
       result =
-        id !== "1" && slices < 3
+        id === "2" && !releaseOldTuning
           ? { state: "running" }
           : {
               state: "complete",
@@ -54,13 +55,11 @@ test("helper lifecycle ignores stale jobs and replaces estimates only on complet
   b.machine.name = "Fixture machine";
   b.process.name = "Fixture process";
   b.filament.name = "Fixture filament";
-  await page
-    .locator("#file")
-    .setInputFiles({
-      name: "fixtures.json",
-      mimeType: "application/json",
-      buffer: Buffer.from(JSON.stringify(Object.values(b))),
-    });
+  await page.locator("#file").setInputFiles({
+    name: "fixtures.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(Object.values(b))),
+  });
   for (const kind of ["machine", "process", "filament"])
     await page
       .locator(`#pick-${kind}`)
@@ -79,6 +78,15 @@ test("helper lifecycle ignores stale jobs and replaces estimates only on complet
   await page
     .getByRole("spinbutton", { name: "Outer wall speed value" })
     .fill("260");
+  await expect(page.locator("#summary-2")).toContainText(
+    "latest changes queued",
+  );
+  expect(slices).toBe(2);
+  await page
+    .getByRole("spinbutton", { name: "Outer wall speed value" })
+    .fill("270");
+  await expect(page.locator("#number-outer_wall_speed")).toHaveValue("270");
+  releaseOldTuning = true;
   await expect.poll(() => slices).toBe(3);
   await expect(page.locator("#summary-2 .time-metric strong")).toHaveText(
     "0 h 2 min",

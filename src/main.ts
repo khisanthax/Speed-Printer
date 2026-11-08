@@ -34,6 +34,8 @@ let connected = false,
   selected = 0,
   timer: ReturnType<typeof setTimeout>,
   syncing = false;
+let tuningBusy = false,
+  tuningQueued = false;
 let bundles = [demoBundle(), demoBundle(true)],
   tuned = structuredClone(bundles[0]);
 let importedProcesses: (Profile | undefined)[] = [];
@@ -281,6 +283,15 @@ async function slice(i: number) {
     return;
   }
   const b = structuredClone(i === 2 ? tuned : bundles[i]);
+  if (i === 2 && tuningBusy) {
+    tuningQueued = true;
+    states[2] = summaries[2]
+      ? "Stale · latest changes queued"
+      : "Pending · latest changes queued";
+    updateSummaries();
+    return;
+  }
+  if (i === 2) tuningBusy = true;
   const selectedModel = model;
   const matchesCurrent = () =>
     model === selectedModel &&
@@ -298,6 +309,15 @@ async function slice(i: number) {
     if (!matchesCurrent()) return;
     states[i] = (summaries[i] ? "Stale · " : "") + String(e);
     updateSummaries();
+  } finally {
+    if (i === 2) {
+      tuningBusy = false;
+      if (tuningQueued) {
+        tuningQueued = false;
+        clearTimeout(timer);
+        void slice(2);
+      }
+    }
   }
 }
 function importDialog(i: number) {
