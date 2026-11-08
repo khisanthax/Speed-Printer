@@ -22,6 +22,12 @@ test("helper lifecycle ignores stale jobs and replaces estimates only on complet
     if (path === "/slice") result = { id: String(++slices) };
     if (path === "/export-project") result = { id: "export" };
     if (path === "/analyze") result = { id: "analysis" };
+    if (path === "/install") {
+      const installed = structuredClone(route.request().postDataJSON().bundle);
+      for (const kind of ["machine", "process", "filament"])
+        installed[kind].name = `Installed ${kind}`;
+      result = { installed: [], bundle: installed };
+    }
     if (path.startsWith("/jobs/")) {
       const id = path.split("/").pop();
       result =
@@ -134,13 +140,11 @@ test("helper lifecycle ignores stale jobs and replaces estimates only on complet
   for (const kind of ["machine", "process", "filament"] as const)
     target[kind].name = `Target ${kind}`;
   target.process.outer_wall_speed = "300";
-  await page
-    .locator("#file")
-    .setInputFiles({
-      name: "target.json",
-      mimeType: "application/json",
-      buffer: Buffer.from(JSON.stringify(Object.values(target))),
-    });
+  await page.locator("#file").setInputFiles({
+    name: "target.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(Object.values(target))),
+  });
   for (const kind of ["machine", "process", "filament"])
     await page
       .locator(`#pick-${kind}`)
@@ -154,6 +158,13 @@ test("helper lifecycle ignores stale jobs and replaces estimates only on complet
   await expect(page.locator("#summary-2")).toContainText(
     "Verified local slice",
   );
+  await page.locator("#install").click();
+  await page.locator("#confirm-install").click();
+  await expect.poll(() => slices).toBe(6);
+  await expect(page.locator("#summary-2")).toContainText(
+    "Verified local slice",
+  );
+  await expect(page.locator("#number-outer_wall_speed")).toHaveValue("300");
   await page
     .getByRole("button", { name: "Compare conditions", exact: true })
     .click();

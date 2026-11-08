@@ -205,7 +205,10 @@ def handler_for(state):
                 allowed = dialog(lambda r: messagebox.askyesno('Install new Orca presets?', f'Create three NEW profiles named {name!r} in:\n{folder}\n\nOriginal profiles will not be overwritten. Open a new Orca window afterward; keep unsaved projects open. Estimates do not establish hardware safety.', parent=r))
                 if not allowed:
                     raise ValueError('Local installation confirmation declined')
-                return {'installed': install_presets(bundle, name, folder, state.engine.validated)}
+                installed = install_presets(bundle, name, folder, state.engine.validated)
+                installed_bundle = {kind: json.loads(Path(path).read_text(encoding='utf-8'))
+                                    for kind, path in zip(('machine', 'process', 'filament'), installed)}
+                return {'installed': installed, 'bundle': installed_bundle}
             if self.path in ('/history', '/limits'):
                 route = '/server/history/list?limit=100&order=desc' if self.path == '/history' else '/printer/objects/query?toolhead&configfile'
                 data = moon_read(body['url'], route, body.get('apiKey', ''))

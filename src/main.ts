@@ -174,7 +174,20 @@ function summary(i: number) {
   const s = summaries[i];
   const b = summaries[1 - selected];
   const pct = s && b ? (s.seconds / b.seconds - 1) * 100 : undefined;
-  return `<div class="section-title"><h2><span>▥</span> ${i === 2 ? "Live Summary" : "Summary"}</h2>${i === 2 ? '<div><button class="small" id="export-project">Export 3MF</button><button class="small" id="reslice">↻ Re-slice</button></div>' : `<span class="chip">${s ? "OrcaSlicer result" : "Awaiting slice"}</span>`}</div><div class="time-metric"><span>◷ &nbsp; Estimated print time</span><div class="time-value"><strong>${duration(s?.seconds)}</strong>${s ? `<small>${s.seconds.toLocaleString()} s · exact engine estimate</small>` : ""}</div></div><div class="metric"><span>▤ &nbsp; Filament used</span><strong>${s?.grams === undefined ? "Not provided" : s.grams.toFixed(2) + " g"}</strong><small>${s?.meters === undefined ? "" : s.meters.toFixed(2) + " m"}</small></div><div class="metric"><span>♧ &nbsp; Support material</span><strong>Not separately provided</strong></div><div class="metric"><span>⌁ &nbsp; Travel / feature breakdown</span><strong>Not provided by engine</strong></div><div class="result-status ${states[i].includes("Stale") ? "stale" : ""}">${escape(states[i])}${pct === undefined ? "" : ` · ${pct > 0 ? "+" : ""}${pct.toFixed(1)}% vs target`}</div>${i === 2 ? `<div class="safety">Faster estimates do not establish safe hardware limits.</div><div class="actions"><button id="reset">↶ Reset</button><button id="save">♧ Save Preset</button><button id="install" class="primary">♙ Install in OrcaSlicer</button></div>` : `<button data-slice="${i}" class="slice">Slice ${i === 0 ? "current" : "target"} profile</button><small class="source">${s ? escape(s.source) + (s.objectCount ? ` · ${s.objectCount} objects` : "") + (s.notes?.length ? `<details><summary>Project scope / compatibility</summary>${s.notes.map((note) => `<p>${escape(note)}</p>`).join("")}</details>` : "") : "Real estimates appear after local slicing completes."}</small>`}`;
+  return `<div class="section-title"><h2><span>▥</span> ${i === 2 ? "Live Summary" : "Summary"}</h2>${i === 2 ? `<div><button class="small" id="export-project">Export 3MF</button>${s?.notes?.length ? `<button class="small" data-result-details="2">Scope</button>` : ""}<button class="small" id="reslice">↻ Re-slice</button></div>` : `<span class="chip">${s ? "OrcaSlicer result" : "Awaiting slice"}</span>`}</div><div class="time-metric"><span>◷ &nbsp; Estimated print time</span><div class="time-value"><strong>${duration(s?.seconds)}</strong>${s ? `<small>${s.seconds.toLocaleString()} s · exact engine estimate</small>` : ""}</div></div><div class="metric"><span>▤ &nbsp; Filament used</span><strong>${s?.grams === undefined ? "Not provided" : s.grams.toFixed(2) + " g"}</strong><small>${s?.meters === undefined ? "" : s.meters.toFixed(2) + " m"}</small></div><div class="metric"><span>♧ &nbsp; Support material</span><strong>Not separately provided</strong></div><div class="metric"><span>⌁ &nbsp; Travel / feature breakdown</span><strong>Not provided by engine</strong></div><div class="result-status ${states[i].includes("Stale") ? "stale" : ""}">${escape(states[i])}${pct === undefined ? "" : ` · ${pct > 0 ? "+" : ""}${pct.toFixed(1)}% vs target`}</div>${i === 2 ? `<div class="safety">Faster estimates do not establish safe hardware limits.</div><div class="actions"><button id="reset">↶ Reset</button><button id="save">♧ Save Preset</button><button id="install" class="primary">♙ Install in OrcaSlicer</button></div>` : `<button data-slice="${i}" class="slice">Slice ${i === 0 ? "current" : "target"} profile</button><small class="source">${s ? escape(s.source) + (s.objectCount ? ` · ${s.objectCount} objects` : "") + (s.notes?.length ? `<button class="small" data-result-details="${i}">Scope & limits</button>` : "") : "Real estimates appear after local slicing completes."}</small>`}`;
+}
+function bindResultDetails() {
+  document
+    .querySelectorAll<HTMLButtonElement>("[data-result-details]")
+    .forEach((el) => {
+      el.onclick = () => {
+        const result = summaries[Number(el.dataset.resultDetails)];
+        if (!result) return;
+        modal(
+          `<h2>Last verified slice: scope and limits</h2><p>${result.seconds.toLocaleString()} seconds · ${escape(result.source)}${result.objectCount ? ` · ${result.objectCount} objects` : ""}. A stale summary remains the last completed result until re-slicing finishes.</p>${result.notes?.map((note) => `<p>${escape(note)}</p>`).join("") || ""}`,
+        );
+      };
+    });
 }
 function renderCompare() {
   const scroll = $<HTMLElement>(".settings-scroll")?.scrollTop || 0;
@@ -253,9 +266,11 @@ function renderCompare() {
   };
   $("#reslice").onclick = () => void slice(2);
   $("#export-project").onclick = () => void exportProject();
+  bindResultDetails();
   $("#save").onclick = savePreset;
   $("#install").onclick = () => void install();
   $("#analyze").onclick = analysisDialog;
+  bindResultDetails();
 }
 function updateSummaries() {
   [0, 1, 2].forEach((i) => {
@@ -273,6 +288,7 @@ function updateSummaries() {
   };
   $("#reslice").onclick = () => void slice(2);
   $("#export-project").onclick = () => void exportProject();
+  bindResultDetails();
   $("#save").onclick = savePreset;
   $("#install").onclick = () => void install();
 }
@@ -484,13 +500,23 @@ async function install() {
   );
   $("#confirm-install").onclick = async () => {
     try {
-      await helper.call("/install", {
-        bundle: tuned,
-        name: $<HTMLInputElement>("#install-name").value,
-      });
+      const installing = structuredClone(tuned);
+      const result = await helper.call<{ installed: string[]; bundle: Bundle }>(
+        "/install",
+        {
+          bundle: installing,
+          name: $<HTMLInputElement>("#install-name").value,
+        },
+      );
       $<HTMLDialogElement>("#modal").close();
+      if (JSON.stringify(tuned) === JSON.stringify(installing)) {
+        tuned = result.bundle;
+        states[2] = "Stale · verifying installed preset names";
+        renderCompare();
+        void slice(2);
+      }
       notify(
-        "Three new presets installed. Reopen OrcaSlicer and select the new machine, process and filament.",
+        "Three new presets installed. Verifying their named bundle; open a new Orca window to use them. Unsaved projects can stay open.",
       );
     } catch (e) {
       notify(String(e));
