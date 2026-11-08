@@ -460,6 +460,16 @@ function renderPresets() {
     (e) =>
       (e.onclick = () => {
         const p = all[Number(e.dataset.export)];
+        modal(
+          '<h2>Export Orca presets</h2><p>Download each file, then import all three through OrcaSlicer’s Import Configs menu. These exports may contain private profile data.</p><div class="actions">' +
+            ["machine", "process", "filament"]
+              .map(
+                (kind) =>
+                  `<button data-export-kind="${kind}">Download ${kind}.json</button>`,
+              )
+              .join("") +
+            "</div>",
+        );
         Object.entries(p.bundle).forEach(([k, v]) => {
           const exported: Profile = {
             ...v,
@@ -485,7 +495,8 @@ function renderPresets() {
             if (k === "process") exported.print_settings_id = exported.name;
             else exported.filament_settings_id = [exported.name];
           }
-          download(`Speed-Printer-${k}.json`, exported);
+          $(`[data-export-kind="${k}"]`).onclick = () =>
+            download(`Speed-Printer-${k}.json`, exported);
         });
       }),
   );

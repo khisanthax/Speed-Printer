@@ -198,7 +198,14 @@ def handler_for(state):
                 return {'installed': install_presets(bundle, name, folder, state.engine.validated)}
             if self.path in ('/history', '/limits'):
                 route = '/server/history/list?limit=100&order=desc' if self.path == '/history' else '/printer/objects/query?toolhead&configfile'
-                return moon_read(body['url'], route, body.get('apiKey', ''))
+                data = moon_read(body['url'], route, body.get('apiKey', ''))
+                if self.path == '/limits':
+                    status = data.get('result', {}).get('status', {})
+                    keys = ('max_velocity', 'max_accel', 'max_z_velocity', 'max_z_accel', 'square_corner_velocity')
+                    toolhead = status.get('toolhead', {})
+                    printer = status.get('configfile', {}).get('settings', {}).get('printer', {})
+                    return {'result': {'status': {'toolhead': {k: toolhead[k] for k in keys if k in toolhead}, 'configfile': {'settings': {'printer': {k: printer[k] for k in keys if k in printer}}}}}}
+                return data
             raise ValueError('Unknown route')
     return Handler
 

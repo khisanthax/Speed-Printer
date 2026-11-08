@@ -3,8 +3,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
-from core import Engine, digest, flatten, install_presets, parse_gcode, resolve, validate_bundle
+from core import Engine, digest, flatten, install_presets, inspect_model, parse_gcode, resolve, validate_bundle
 
 def bundle():
     return {k: {'type': k, 'name': k, 'inherits': ''} for k in ('machine','process','filament')}
@@ -41,6 +42,15 @@ class IntegrationContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):validate_bundle(b)
         b['process']['travel_speed']='99999'
         with self.assertRaises(ValueError):validate_bundle(b)
+
+    def test_3mf_embedded_executable_settings_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            model=Path(temp)/'project.3mf'
+            for config in ('{"nested":{"post_process":"execute something"}}', '<config><metadata key="plugins" value="unsafe-script"/></config>'):
+                with zipfile.ZipFile(model,'w') as z:z.writestr('Metadata/project_settings.config',config)
+                with self.assertRaises(ValueError):inspect_model(model)
+            with zipfile.ZipFile(model,'w') as z:z.writestr('Metadata/project_settings.config','{"post_process": "", "plugins": []}')
+            self.assertEqual(inspect_model(model),model.resolve())
 
     def test_install_requires_exact_validation_and_never_overwrites(self):
         b=flatten(bundle())

@@ -4,7 +4,7 @@ Compare OrcaSlicer presets, measure model-specific speed effects with real local
 
 - **Web app:** https://khisanthax.github.io/Speed-Printer/
 - **Source:** https://github.com/khisanthax/Speed-Printer
-- **Windows helper:** download `SpeedPrinterHelper-Windows` from a successful **Test and package** run under [Actions](https://github.com/khisanthax/Speed-Printer/actions). The EXE is unsigned; source execution is also supported.
+- **Windows helper:** [download the latest release](https://github.com/khisanthax/Speed-Printer/releases/latest), including `SpeedPrinterHelper.exe` and its SHA-256 checksum. The EXE is unsigned; source execution is also supported. Per-commit builds are also available as `SpeedPrinterHelper-Windows` artifacts under [Actions](https://github.com/khisanthax/Speed-Printer/actions).
 
 ## Quick start
 
