@@ -8,8 +8,9 @@ The browser calls `helper/server.py` over authenticated loopback HTTP. Native di
 
 ## Contracts
 
-- `GET /health`: helper version, instance identifier and executable availability.
-- `POST /auth/challenge`, `/auth/pair`, `/auth/resume`: exact Host/Origin checked, bounded one-use challenge/proof exchange. Initial pairing additionally requires the tray-issued five-minute code. Session tokens last at most eight hours; restarts retain public-key trust, not sessions.
+- `GET /discover`: unauthenticated minimal version/instance/approval capability; exact Host/Origin still required.
+- `GET /health`: authenticated helper version, instance identifier and executable availability.
+- `POST /auth/challenge`, `/auth/pair`, `/auth/resume`, `/auth/approve`: exact Host/Origin checked, bounded one-use challenge/proof exchange. First connection verifies the signed proof before native origin-naming approval; fallback pairing requires the tray-issued five-minute code. Session tokens last at most eight hours; restarts retain public-key trust, not sessions.
 - `POST /auth/revoke`: revoke this authenticated browser; tray Settings revokes all.
 - `GET /library`: protected cached curated library; `POST /profiles` incrementally refreshes after one native approval, `{all:true}` deliberately loads full catalog.
 - `GET/POST /workspace`: DPAPI-protected comparison snapshots, separate from source presets.
@@ -22,7 +23,7 @@ The browser calls `helper/server.py` over authenticated loopback HTTP. Native di
 - `POST /history {url,apiKey?}`: fixed read-only Moonraker `/server/history/list?limit=100&order=desc`.
 - `POST /limits {url,apiKey?}`: fixed read-only `/printer/objects/query?toolhead&configfile`.
 
-Every endpoint requires an exact allowed Origin and `Host: 127.0.0.1:8377`. Non-auth endpoints additionally require a matching session bearer token. Preflight requires Host/Origin but not the token. No wildcard CORS or cookie authentication is used. Browser token state and Moonraker keys are in memory. The browser's platform local-network policy may require local use of the web app.
+Every endpoint requires an exact allowed Origin and `Host: 127.0.0.1:8377`. Private endpoints (all except discovery and the authentication exchange) additionally require a matching session bearer token. Preflight requires Host/Origin but not the token. No wildcard CORS or cookie authentication is used. Browser token state and Moonraker keys are in memory. The browser's platform local-network policy may require local use of the web app.
 
 ## Slicing provenance
 
