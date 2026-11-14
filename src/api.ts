@@ -7,6 +7,12 @@ export class Helper {
     publicKey: JsonWebKey;
   };
   private resuming?: Promise<void>;
+  private discovery?: Promise<void>;
+  private approvalAttempt = "";
+  connectionStatus = "Helper disconnected · launch the tray helper";
+  onStatus?: (status: string) => void;
+  private status(value: string) { this.connectionStatus = value; this.onStatus?.(value); }
+  retryApproval() { this.approvalAttempt = ""; }
   private async browserIdentity() {
     if (this.identity) return this.identity;
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -46,17 +52,27 @@ export class Helper {
     db.close();
     return (this.identity = identity);
   }
-  private async proof(code?: string) {
+  private async proof(code?: string, approval = false, instance = "") {
     const identity = await this.browserIdentity();
     const challenge = await this.request<{
       id: string;
       message: string;
       legacySession?: boolean;
+      paired?: boolean;
+      revoked?: boolean;
     }>("/auth/challenge", { clientId: identity.id });
     // Explicit fixture servers only. Production helper never enables this protocol.
     if (challenge.legacySession && code) {
       this.token = code;
       return;
+    }
+    if (approval && challenge.revoked)
+      throw new Error("Trust revoked · use the fallback code to explicitly pair again");
+    const nativeApproval = approval && challenge.paired === false;
+    if (nativeApproval) {
+      if (this.approvalAttempt === instance) throw new Error(this.connectionStatus);
+      this.approvalAttempt = instance;
+      this.status("Helper found · approve this website in the Windows dialog");
     }
     const signature = new Uint8Array(
       await crypto.subtle.sign(
@@ -70,18 +86,35 @@ export class Helper {
       .replaceAll("/", "_")
       .replaceAll("=", "");
     const result = await this.request<{ token: string }>(
-      code ? "/auth/pair" : "/auth/resume",
+      code ? "/auth/pair" : nativeApproval ? "/auth/approve" : "/auth/resume",
       {
         clientId: identity.id,
         challenge: challenge.id,
         signature: encoded,
-        ...(code ? { code, publicKey: identity.publicKey } : {}),
+        ...(code || nativeApproval ? { ...(code ? {code} : {}), publicKey: identity.publicKey } : {}),
       },
     );
     this.token = result.token;
   }
   async pair(code: string) {
     await this.proof(code);
+  }
+  async discover() {
+    if (this.token) return;
+    if (!this.discovery) this.discovery = (async () => {
+      let found: {instance: string; approval: boolean};
+      try { found = await this.request("/discover"); }
+      catch (e) {
+        // Older helpers retain the signed resume/code fallback.
+        if ((e as {status?: number}).status === 404) { await this.resume(); return; }
+        this.status("Helper unreachable · start it, or allow local/loopback access in this browser's site settings");
+        throw e;
+      }
+      if (!found.approval) { await this.resume(); return; }
+      try { await this.proof(undefined, true, found.instance); }
+      catch (e) { this.status(String(e)); throw e; }
+    })().finally(() => { this.discovery = undefined; });
+    return this.discovery;
   }
   async resume() {
     if (!this.resuming)
@@ -98,7 +131,8 @@ export class Helper {
     const controller = new AbortController();
     // Native dialogs and slices can take time; only auth/heartbeat have short timeouts.
     const timeout =
-      path.startsWith("/auth/") || path === "/health"
+      path === "/auth/approve" ? setTimeout(() => controller.abort(), 180000) :
+      path.startsWith("/auth/") || path === "/health" || path === "/discover"
         ? setTimeout(() => controller.abort(), 5000)
         : undefined;
     try {
@@ -127,7 +161,8 @@ export class Helper {
       return await this.request<T>(path, data);
     } catch (e) {
       if ((e as { status?: number }).status !== 403) throw e;
-      await this.resume();
+      try { await this.resume(); }
+      catch (error) { this.token = ""; throw error; }
       return this.request<T>(path, data);
     }
   }

@@ -144,6 +144,8 @@ def handler_for(state):
             self.end_headers()
 
         def do_GET(self):
+            if self.path=='/discover' and self.permitted(False):
+                return self.reply(200, {'version':'0.3.0','instance':state.instance,'approval':not state.test_mode})
             if not self.permitted():
                 return self.reply(403, {'error': 'Origin, host or session token denied'})
             if self.path == '/health':
@@ -157,7 +159,7 @@ def handler_for(state):
             return self.reply(404, {'error': 'Unknown route'})
 
         def do_POST(self):
-            auth_route = self.path in ('/auth/challenge', '/auth/pair', '/auth/resume')
+            auth_route = self.path in ('/auth/challenge', '/auth/pair', '/auth/resume', '/auth/approve')
             if not self.permitted(not auth_route):
                 return self.reply(403, {'error': 'Origin, host or session token denied'})
             try:
@@ -180,6 +182,12 @@ def handler_for(state):
                 return state.trust.challenge(self.headers['Origin'],body.get('clientId'))
             if self.path in ('/auth/pair','/auth/resume'):
                 return state.trust.authenticate(self.headers['Origin'],body,self.path == '/auth/pair')
+            if self.path=='/auth/approve':
+                if state.test_mode: raise ValueError('Native approval unavailable in legacy fixtures')
+                def approve(origin):
+                    return dialog(lambda r: messagebox.askyesno('Speed Printer · Allow website?',
+                        f'Allow {origin} to connect to Speed Printer on this PC?\n\nThis website can request local Orca slicing and profile access. Profile reading and installation still require their local confirmations.\n\nTrust is remembered for this browser and can be revoked in Settings.',parent=r))
+                return state.trust.authenticate(self.headers['Origin'],body,approve=approve)
             if self.path == '/auth/revoke':
                 state.trust.revoke(self.headers.get('Authorization'))
                 return {'revoked':True}

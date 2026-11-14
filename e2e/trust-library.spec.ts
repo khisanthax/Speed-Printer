@@ -9,7 +9,8 @@ test("real browser signing key, restart trust, curated refresh and immutable exp
     trusted: JsonWebKey | undefined,
     challenge = "",
     permission = false,
-    pairs = 0;
+    pairs = 0,
+    revoked = false;
   const source = demoBundle();
   for (const [kind, p] of Object.entries(source)) {
     p.__sp_id = kind;
@@ -60,11 +61,12 @@ test("real browser signing key, restart trust, curated refresh and immutable exp
     const body = route.request().postDataJSON();
     let result: unknown = {},
       status = 200;
-    if (path === "/auth/challenge") {
+    if (path === "/discover") result = {instance:"fixture-helper",approval:true};
+    else if (path === "/auth/challenge") {
       challenge = crypto.randomUUID();
-      result = { id: challenge, message: challenge };
-    } else if (path === "/auth/pair" || path === "/auth/resume") {
-      const jwk = path === "/auth/pair" ? body.publicKey : trusted;
+      result = { id: challenge, message: challenge, paired:!!trusted,revoked };
+    } else if (path === "/auth/pair" || path === "/auth/resume" || path === "/auth/approve") {
+      const jwk = path !== "/auth/resume" ? body.publicKey : trusted;
       let valid = false;
       if (jwk && body.challenge === challenge) {
         const key = await webcrypto.subtle.importKey(
@@ -81,11 +83,11 @@ test("real browser signing key, restart trust, curated refresh and immutable exp
           new TextEncoder().encode(challenge),
         );
       }
-      if (valid && (path !== "/auth/pair" || body.code === "fixture-code")) {
+      if (valid && !revoked && (path !== "/auth/pair" || body.code === "fixture-code")) {
         trusted = jwk;
         token = crypto.randomUUID();
         result = { token };
-        if (path === "/auth/pair") pairs++;
+        if (path !== "/auth/resume") pairs++;
       } else {
         status = 400;
         result = { error: "Pairing required" };
@@ -97,7 +99,8 @@ test("real browser signing key, restart trust, curated refresh and immutable exp
     ) {
       status = 403;
       result = { error: "Session expired" };
-    } else if (path === "/health") result = { orcaFound: true };
+    } else if (path === "/auth/revoke") { trusted=undefined;token="";revoked=true;result={revoked:true}; }
+    else if (path === "/health") result = { orcaFound: true };
     else if (path === "/library") result = library();
     else if (path === "/profiles") {
       permission = true;
@@ -113,10 +116,10 @@ test("real browser signing key, restart trust, curated refresh and immutable exp
     });
   });
   await page.goto("");
+  await expect(page.locator("#connection-state")).toHaveText("Local helper connected");
   await page.getByRole("button", { name: "⚙ Settings", exact: true }).click();
-  await page.locator("#token").fill("fixture-code");
-  await page.locator("#pair").click();
-  await expect(page.locator("#pair-status")).toContainText("Connected");
+  // First native approval was discovered automatically; no code or connect click.
+  expect(pairs).toBe(1);
   await page.locator("#refresh-settings").click();
   await page
     .getByRole("button", { name: "▱ Compare & Tune", exact: true })
@@ -177,5 +180,11 @@ test("real browser signing key, restart trust, curated refresh and immutable exp
     "Local helper connected",
   );
   await expect(page.locator('[data-printer="0"] option')).toHaveCount(2);
+  expect(pairs).toBe(1);
+  await page.getByRole("button", { name: "⚙ Settings", exact: true }).click();
+  await page.locator("#revoke").click();
+  await expect(page.locator("#pair-status")).toContainText("revoked");
+  await page.reload();
+  await expect(page.locator("#connection-state")).toContainText("revoked");
   expect(pairs).toBe(1);
 });

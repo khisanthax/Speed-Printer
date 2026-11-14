@@ -19,6 +19,9 @@ class Trust:
     def __init__(self, store):
         self.store = store
         self.clients = dict(store.data.get('trusted', {}))
+        self.revoked = dict(store.data.get('revoked', {}))
+        self.approvals = {}
+        self.approval_pending = ''
         self.sessions = {}
         self.challenges = {}
         self.lock = threading.RLock()
@@ -30,7 +33,7 @@ class Trust:
     def pairing_code(self):
         with self.lock:
             if time.time() >= self.code_until:
-                self.code = secrets.token_urlsafe(18)
+                self.code = ''.join(secrets.choice('ABCDEFGHJKLMNPQRSTUVWXYZ23456789') for _ in range(8))
                 self.code_until = time.time() + 300
             return self.code
 
@@ -45,9 +48,10 @@ class Trust:
             ident = secrets.token_urlsafe(24)
             message = f'Speed Printer trust v1\n{origin}\n{client}\n{ident}'
             self.challenges[ident] = {'client':client, 'origin':origin, 'message':message, 'until':now+30}
-            return {'id':ident, 'message':message}
+            record=self.clients.get(client)
+            return {'id':ident, 'message':message, 'paired':bool(record and record['origin']==origin), 'revoked':self.revoked.get(client)==origin}
 
-    def authenticate(self, origin, body, pairing=False):
+    def authenticate(self, origin, body, pairing=False, approve=None):
         with self.lock:
             now = time.time()
             self.failures = [t for t in self.failures if now-t < 60]
@@ -58,8 +62,8 @@ class Trust:
                 client = body.get('clientId')
                 if not challenge or challenge['until'] <= now or challenge['origin'] != origin or challenge['client'] != client:
                     raise ValueError('Expired or invalid browser challenge')
-                if pairing:
-                    if now >= self.code_until or not self.code or not hmac.compare_digest(str(body.get('code','')), self.code):
+                if pairing or approve:
+                    if not approve and (now >= self.code_until or not self.code or not hmac.compare_digest(str(body.get('code','')).strip().upper(), self.code)):
                         raise ValueError('Copy a current pairing code from the helper tray')
                     jwk = body['publicKey']
                 else:
@@ -75,10 +79,26 @@ class Trust:
                     raise ValueError('Invalid signature size')
                 der = utils.encode_dss_signature(int.from_bytes(signature[:32],'big'),int.from_bytes(signature[32:],'big'))
                 public.verify(der, challenge['message'].encode(), ec.ECDSA(hashes.SHA256()))
-                if pairing:
+                if approve:
+                    if client in self.clients or self.revoked.get(client)==origin:
+                        raise ValueError('Use existing trust or explicitly pair again after revocation')
+                    # Verify key possession BEFORE prompting. Bound local prompts
+                    # even if an allowed origin generates many browser identities.
+                    recent=[t for t in self.approvals.values() if now-t<60]
+                    if len(recent)>=3 or now-self.approvals.get(client,0)<60:
+                        raise ValueError('Approval already requested; retry later')
+                    self.approvals={k:v for k,v in self.approvals.items() if now-v<60}
+                    self.approvals[client]=now
+                    self.approval_pending=origin
+                    try:
+                        if not approve(origin): raise ValueError('Local approval declined')
+                    finally:self.approval_pending=''
+                    now=time.time()
+                if pairing or approve:
                     clean = {k:jwk[k] for k in ('kty','crv','x','y')}
                     self.clients[client] = {'origin':origin, 'publicKey':clean, 'pairedAt':now}
-                    self.store.update(trusted=self.clients)
+                    self.revoked.pop(client,None)
+                    self.store.update(trusted=self.clients,revoked=self.revoked)
                     self.code = ''; self.code_until = 0
                 token = secrets.token_urlsafe(32)
                 # Several tabs can share one browser identity without revoking each other.
@@ -90,7 +110,7 @@ class Trust:
                 return {'token':token}
             except (ValueError, KeyError, TypeError, InvalidSignature):
                 self.failures.append(now)
-                raise ValueError('Pairing proof rejected. Copy a new code or pair this browser again.') from None
+                raise ValueError('Connection not approved, revoked, or proof expired. Retry approval in Settings or use a fresh fallback code.') from None
 
     def permitted(self, origin, header):
         with self.lock:
@@ -106,9 +126,11 @@ class Trust:
             if header:
                 record = self.sessions.get(header.removeprefix('Bearer '))
                 if record:
+                    self.revoked[record['client']]=record['origin']
                     self.clients.pop(record['client'],None)
             else:
+                self.revoked.update({k:v['origin'] for k,v in self.clients.items()})
                 self.clients.clear()
             self.sessions = {k:v for k,v in self.sessions.items() if v['client'] in self.clients}
-            self.store.update(trusted=self.clients)
+            self.store.update(trusted=self.clients,revoked=self.revoked)
             self.code = ''; self.code_until = 0

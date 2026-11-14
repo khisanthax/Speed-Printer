@@ -30,6 +30,11 @@ const escape = (s: unknown) =>
       ]!,
   );
 const helper = new Helper();
+helper.onStatus = (status) => {
+  $("#connection-state").textContent = status;
+  const field = document.querySelector("#pair-status");
+  if (field) field.textContent = status;
+};
 let library: Library | undefined;
 let restoredWorkspace = false;
 let refreshBusy = false;
@@ -1067,7 +1072,7 @@ function renderPresets() {
 }
 function renderSettings() {
   $("#other").innerHTML =
-    `<h2>Local companion settings</h2><p>Run SpeedPrinterHelper.exe. It stays in the Windows tray without a console. Right-click the tray icon → Copy Pairing Code, then paste it here once.</p><div class="form-grid"><label>Pairing code<input id="token" type="password" autocomplete="off" placeholder="Copy from the helper tray menu"></label><button id="pair" class="primary">Pair local helper</button><button id="reconnect">Reconnect</button><button id="revoke">Revoke this browser</button></div><p id="pair-status">${connected ? "Connected · browser trust remembered" : "Disconnected · start the helper or pair this browser"}</p><p>Trusted browsers reconnect automatically. Closing helper Settings keeps it running; Exit in its tray menu stops it. Start with Windows is optional and off by default.</p><h3>Orca profile library</h3><button id="refresh-settings">Refresh from OrcaSlicer</button><p>One local permission imports configured printers and compatible saved presets. Refresh adds new presets and flags changed or missing sources without replacing experiment snapshots. Portable and account overrides are in the helper tray Settings.</p><h3>Manual fallback</h3><p>Import JSON files from Compare &amp; Tune. Export the three profiles from Saved Presets and use OrcaSlicer → Import Configs. Verified estimates require the local helper.</p><h3>Privacy</h3><p>Browser trust uses a non-exportable signing key in IndexedDB; no persistent bearer token is stored in page storage. Helper trust and profile cache use Windows protection. Scripts running on this trusted web origin can request signing; protect this browser and account. Profile snapshots and experiments stay local. Moonraker API keys remain in memory.</p><a href="https://github.com/khisanthax/Speed-Printer/releases/latest" target="_blank" rel="noreferrer">Download the Windows tray helper ↗</a>`;
+    `<h2>Local companion settings</h2><p>Run SpeedPrinterHelper.exe. This website discovers it on this PC. On first connection, approve the website in the Windows helper dialog. Future visits reconnect automatically. Browser local/loopback access may need permission in site settings. Use the short code below only as a fallback.</p><div class="form-grid"><label>Fallback pairing code<input id="token" type="password" autocomplete="off" placeholder="Copy from the helper tray menu"></label><button id="pair" class="primary">Pair local helper</button><button id="reconnect">Retry connection / approval</button><button id="revoke">Revoke this browser</button></div><p id="pair-status">${connected ? "Connected · browser trust remembered" : "Disconnected · start the helper or pair this browser"}</p><p>Trusted browsers reconnect automatically. Closing helper Settings keeps it running; Exit in its tray menu stops it. Start with Windows is optional and off by default.</p><h3>Orca profile library</h3><button id="refresh-settings">Refresh from OrcaSlicer</button><p>One local permission imports configured printers and compatible saved presets. Refresh adds new presets and flags changed or missing sources without replacing experiment snapshots. Portable and account overrides are in the helper tray Settings.</p><h3>Manual fallback</h3><p>Import JSON files from Compare &amp; Tune. Export the three profiles from Saved Presets and use OrcaSlicer → Import Configs. Verified estimates require the local helper.</p><h3>Privacy</h3><p>Browser trust uses a non-exportable signing key in IndexedDB; no persistent bearer token is stored in page storage. Helper trust and profile cache use Windows protection. Scripts running on this trusted web origin can request signing; protect this browser and account. Profile snapshots and experiments stay local. Moonraker API keys remain in memory.</p><a href="https://github.com/khisanthax/Speed-Printer/releases/latest" target="_blank" rel="noreferrer">Download the Windows tray helper ↗</a>`;
   $("#pair").onclick = async () => {
     const code = $<HTMLInputElement>("#token").value.trim();
     $<HTMLInputElement>("#token").value = "";
@@ -1082,10 +1087,12 @@ function renderSettings() {
       $("#pair-status").textContent = String(e);
     }
   };
-  $("#reconnect").onclick = () =>
+  $("#reconnect").onclick = () => {
+    helper.retryApproval();
     void connect().catch((e) => {
       $("#pair-status").textContent = String(e);
     });
+  };
   $("#revoke").onclick = async () => {
     try {
       await helper.revoke();
@@ -1103,10 +1110,15 @@ function setConnected(value: boolean) {
   connected = value;
   $("#connection-state").textContent = value
     ? "Local helper connected"
-    : "Helper disconnected";
+    : helper.connectionStatus;
   $("#connection-dot").classList.toggle("online", value);
 }
-async function connect() {
+let connecting: Promise<void> | undefined;
+function connect() {
+  return connecting ||= connectNow().finally(() => { connecting = undefined; });
+}
+async function connectNow() {
+  if (!helper.token) await helper.discover();
   const health = await helper.call<{
     orcaFound: boolean;
     instance?: string;

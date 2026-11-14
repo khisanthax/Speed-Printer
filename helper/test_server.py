@@ -27,6 +27,13 @@ class SecurityTests(unittest.TestCase):
     def test_preflight_restricts_origins(self):
         self.assertEqual(self.request(method='OPTIONS'),204)
         self.assertEqual(self.request(method='OPTIONS',origin='https://evil.example'),403)
+    def test_discovery_exposes_no_private_state_and_checks_host_origin(self):
+        for origin,host,expected in [('http://127.0.0.1:5173','127.0.0.1:8377',200),('https://evil.test','127.0.0.1:8377',403),('http://127.0.0.1:5173','rebind.test:8377',403),('null','127.0.0.1:8377',403)]:
+            conn=HTTPConnection('127.0.0.1',self.server.server_port)
+            conn.request('GET','/discover',headers={'Host':host,'Origin':origin})
+            r=conn.getresponse();data=json.loads(r.read());conn.close()
+            self.assertEqual(r.status,expected)
+            if expected==200:self.assertEqual(set(data),{'version','instance','approval'})
     def test_only_one_helper_can_own_a_port(self):
         with self.assertRaises(OSError):
             duplicate=LocalServer(self.server.server_address,handler_for(self.state))

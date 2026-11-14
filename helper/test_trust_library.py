@@ -44,6 +44,28 @@ class TrustTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.trust.authenticate(self.origin,{**self.proof(),'code':code,'publicKey':{**self.jwk,'d':'secret'}},True)
         self.trust.authenticate(self.origin,{**self.proof(),'code':code,'publicKey':self.jwk},True)
         with self.assertRaises(ValueError):self.trust.authenticate(self.origin,{**self.proof(),'code':code,'publicKey':self.jwk},True)
+    def test_discovery_requires_verified_key_and_native_approval(self):
+        approvals=[]
+        def allow(origin): approvals.append(origin);return True
+        bad={**self.proof(),'signature':encoded(bytes(64)),'publicKey':self.jwk}
+        with self.assertRaises(ValueError):self.trust.authenticate(self.origin,bad,approve=allow)
+        self.assertEqual(approvals,[])
+        token=self.trust.authenticate(self.origin,{**self.proof(),'publicKey':self.jwk},approve=allow)['token']
+        self.assertEqual(approvals,[self.origin])
+        self.assertTrue(self.trust.permitted(self.origin,'Bearer '+token))
+        restarted=Trust(self.store)
+        self.assertTrue(restarted.challenge(self.origin,self.client)['paired'])
+        restarted.revoke()
+        self.assertTrue(Trust(self.store).challenge(self.origin,self.client)['revoked'])
+        with self.assertRaises(ValueError):restarted.authenticate(self.origin,{**self.proof(restarted),'publicKey':self.jwk},approve=allow)
+        self.assertEqual(approvals,[self.origin])
+    def test_decline_never_grants_access_or_repeats_prompt(self):
+        called=[]
+        def decline(origin):called.append(origin);return False
+        for _ in range(2):
+            with self.assertRaises(ValueError):self.trust.authenticate(self.origin,{**self.proof(),'publicKey':self.jwk},approve=decline)
+        self.assertEqual(called,[self.origin]);self.assertEqual(self.trust.clients,{})
+        self.assertEqual(self.trust.sessions,{})
     def test_multiple_tabs_do_not_revoke_each_other_and_challenges_expire(self):
         first=self.trust.authenticate(self.origin,{**self.proof(),'code':self.trust.pairing_code(),'publicKey':self.jwk},True)['token']
         second=self.trust.authenticate(self.origin,self.proof())['token']

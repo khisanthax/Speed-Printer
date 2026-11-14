@@ -120,7 +120,8 @@ class Tray:
         return im
     def status(self):
         if self.error:return 'Error · '+self.error,'#ef6262'
-        if not self.state.trust.clients:return 'Pairing required','#e5b341'
+        if self.state.trust.approval_pending:return 'Awaiting website approval','#e5b341'
+        if not self.state.trust.clients:return 'Ready · open website to approve','#e5b341'
         if time.time()-self.state.trust.last_connected < 30:return 'Connected','#58c78d'
         return 'Disconnected · trusted browsers will reconnect','#a6aeba'
     def tick(self):
