@@ -41,7 +41,7 @@ test("approved columns, synchronized settings and honest empty summaries", async
   await page
     .getByRole("spinbutton", { name: "Outer wall speed value" })
     .fill("250");
-  await expect(page.locator("#summary-2")).toContainText("Pending");
+  await expect(page.locator("#summary-2")).toContainText("Model required");
   await page.screenshot({ path: ".local/desktop.png", fullPage: true });
 });
 test("save and load experiments and print lab missing-data states", async ({

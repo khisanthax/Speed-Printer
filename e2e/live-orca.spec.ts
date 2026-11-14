@@ -61,9 +61,26 @@ test("real browser → authenticated helper → installed Orca → verified summ
           : { label: "Sovol SV08 PLA" },
       );
     await page.locator("#apply-import").click();
+    // The unified action requires two complete profiles. Using the same public
+    // bundle also verifies that A/B/C can reuse one identical engine result.
+    await page.locator('[data-import="1"]').click();
+    await page
+      .locator("#pick-machine")
+      .selectOption({ label: "Sovol SV08 0.4 nozzle" });
+    await page
+      .locator("#pick-process")
+      .selectOption({ label: "0.20mm Standard @Sovol SV08" });
+    await page.locator("#pick-filament").selectOption(
+      (await page
+        .locator("#pick-filament option")
+        .filter({ hasText: /^Generic PLA @Sovol SV08$/ })
+        .count())
+        ? { label: "Generic PLA @Sovol SV08" }
+        : { label: "Sovol SV08 PLA" },
+    );
+    await page.locator("#apply-import").click();
     await page.locator("#choose-model").click();
     await expect(page.locator("#model-name")).toHaveText("cube.stl");
-    await page.locator('[data-slice="0"]').click();
     await expect(page.locator("#summary-0")).toContainText(
       "Verified local slice",
       { timeout: 120000 },
@@ -71,13 +88,28 @@ test("real browser → authenticated helper → installed Orca → verified summ
     await expect(page.locator("#summary-0 .time-metric strong")).not.toHaveText(
       "—",
     );
-    await page.locator("#reslice").click();
     await expect(page.locator("#summary-2")).toContainText(
       "Verified local slice",
       { timeout: 120000 },
     );
     await expect(page.locator("#summary-2 .time-metric strong")).toHaveText(
       await page.locator("#summary-0 .time-metric strong").innerText(),
+    );
+    const speed = Number(
+      await page.locator("#number-outer_wall_speed").inputValue(),
+    );
+    await page
+      .getByRole("button", { name: "Increase Outer wall speed", exact: true })
+      .click();
+    await expect(page.locator("#number-outer_wall_speed")).toHaveValue(
+      String(speed + 1),
+    );
+    await expect(page.locator("#summary-2")).toContainText(
+      "Stale — recalculating",
+    );
+    await expect(page.locator("#summary-2")).toContainText(
+      "Verified local slice",
+      { timeout: 120000 },
     );
     await page.screenshot({
       path: ".local/real-orca-browser.png",

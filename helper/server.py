@@ -19,6 +19,7 @@ from core import Engine, catalog_from_roots, flatten, install_presets, inspect_m
 from auth import Trust
 from storage import Store, MemoryStore
 from discovery import Library
+from shared_model import SharedModel
 
 class LocalServer(ThreadingHTTPServer):
     allow_reuse_address = False
@@ -146,7 +147,7 @@ def handler_for(state):
             if not self.permitted():
                 return self.reply(403, {'error': 'Origin, host or session token denied'})
             if self.path == '/health':
-                return self.reply(200, {'version': '0.2.0', 'instance':state.instance, 'orcaFound': Path(state.engine.executable).is_file()})
+                return self.reply(200, {'version': '0.3.0', 'sharedLayout':True, 'instance':state.instance, 'orcaFound': Path(state.engine.executable).is_file()})
             if self.path == '/library':
                 return self.reply(200, state.library.document)
             if self.path == '/workspace':
@@ -217,8 +218,17 @@ def handler_for(state):
                 if not path:
                     raise ValueError('No model selected')
                 path = inspect_model(path)
+                bundles=body.get('bundles')
+                if bundles is not None:
+                    if not isinstance(bundles,list) or len(bundles)!=3:
+                        raise ValueError('Select complete A, B and C profiles before choosing the common model')
+                    bundles=[flatten(b,state.engine.catalog) for b in bundles]
+                    chosen=SharedModel(path,bundles)
+                else:
+                    chosen=path # Older clients and public engine fixtures.
                 ident = secrets.token_hex(16)
-                state.models[ident] = path
+                if len(state.models)>=8: state.models.pop(next(iter(state.models)))
+                state.models[ident] = chosen
                 return {'id': ident, 'name': path.name}
             if self.path in ('/slice', '/analyze', '/export-project'):
                 if body.get('model') not in state.models:

@@ -148,6 +148,17 @@ test("real browser signing key, restart trust, curated refresh and immutable exp
   });
   expect(nonExtractable).toBe(true);
   expect(await page.evaluate(() => localStorage.getItem("token"))).toBeNull();
+  const liveInput = page.locator("#number-outer_wall_speed");
+  await liveInput.fill("215");
+  // Same refresh handler as the background timer, without taking input focus.
+  await page.evaluate(() =>
+    document.querySelector<HTMLButtonElement>("#refresh-library")!.click(),
+  );
+  await expect(page.locator("#toast")).toContainText(
+    "Refreshed from OrcaSlicer",
+  );
+  await expect(liveInput).toBeFocused();
+  await expect(liveInput).toHaveValue("215");
   await page.locator("#save").click();
   await page.locator("#confirm-save").click();
   source.process.__sp_hash = "version-two";

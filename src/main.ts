@@ -13,6 +13,7 @@ import {
   parseProfiles,
   resolve,
   settings,
+  tuningStep,
   type Bundle,
   type Profile,
   type Summary,
@@ -42,8 +43,15 @@ let connected = false,
   selected = 0,
   timer: ReturnType<typeof setTimeout>,
   syncing = false;
-let tuningBusy = false,
-  tuningQueued = false;
+let sliceBusy = false;
+const pendingSlices = new Set<number>();
+const revisions = [0, 0, 0];
+const completedSlices = new Map<string, Summary>();
+let modelRevision = 0,
+  tuningDue = 0;
+let activeSlice: { column: number; key: string; revision: number } | undefined;
+let sharedLayoutSupported = false;
+let verifiedLayout: string | undefined, verifiedModelHash: string | undefined;
 let bundles = [demoBundle(), demoBundle(true)],
   tuned = structuredClone(bundles[0]);
 let importedProcesses: (Profile | undefined)[] = [];
@@ -70,7 +78,7 @@ function presets(): Preset[] {
 document.querySelector("#app")!.innerHTML = `
 <header><div class="brand"><span class="cube">⬡</span> Speed Printer <span class="brand-sub">3D Printer Profile Tuner</span></div><span class="tagline">Compare • Tune • Match • Export</span><span class="compatible">✓ OrcaSlicer Compatible</span><button id="help" aria-label="Setup help">?</button></header>
 <aside><nav>${["Compare & Tune", "Saved Presets", "Print Lab", "Settings"].map((v, i) => `<button data-nav="${v}" class="${i === 0 ? "active" : ""}"><span>${["▱", "♧", "♙", "⚙"][i]}</span>${v}</button>`).join("")}</nav><button id="connection" class="connection"><span>◈</span><div>OrcaSlicer<small id="connection-state">Helper disconnected</small></div><i id="connection-dot"></i></button></aside>
-<main><div class="page-heading"><div><h1>3D Printer Profile Comparison & Tuning</h1><p>Compare two printers, tune your profile, and install directly into OrcaSlicer.</p></div><button id="choose-model">＋ Common model / 3MF</button></div><div class="workspace-status"><span id="model-name">${modelName}</span><span id="notice">Demo profiles · import your profiles to begin a verified comparison.</span></div><section id="compare" class="columns"></section><section id="other" hidden></section></main>
+<main><div class="page-heading"><div><h1>3D Printer Profile Comparison & Tuning</h1><p>Compare two printers, tune your profile, and install directly into OrcaSlicer.</p></div><div class="model-actions"><button id="choose-model" class="primary">Select Model &amp; Slice All</button><button id="slice-all" hidden>Slice All</button></div></div><div class="workspace-status"><span id="model-name">${modelName}</span><span id="notice">Demo profiles · import your profiles to begin a verified comparison.</span></div><section id="compare" class="columns"></section><section id="other" hidden></section></main>
 <dialog id="modal"><form method="dialog"><button class="close" aria-label="Close dialog">×</button></form><div id="modal-content"></div></dialog><div id="toast" role="status" aria-live="polite"></div><input type="file" id="file" multiple accept=".json" hidden>`;
 function notify(message: string) {
   $("#toast").textContent = message;
@@ -117,7 +125,7 @@ function conditionsDialog() {
         ),
   );
   modal(
-    `<h2>Comparison conditions</h2><table><thead><tr><th>Condition</th><th>A</th><th>B</th></tr></thead><tbody>${conditions}</tbody></table><p>Saved profiles compare complete recipes, including supports, quality, cooling, flow limits and machine constraints. The difference in total time cannot be attributed to printer speed alone.</p><p>Common-process mode uses A’s entire process on both printers, retaining each machine and calibrated filament. Filament and machine differences still matter. All project parts are auto-arranged on one plate; placement may differ by bed size. Embedded object settings remain part of the common project.</p><div class="actions"><button id="common-process">Use A’s process on both</button><button id="restore-process">Restore imported processes</button></div><table><thead><tr><th>Effective setting</th><th>A</th><th>B</th></tr></thead><tbody>${differences.join("")}</tbody></table>`,
+    `<h2>Comparison conditions</h2><table><thead><tr><th>Condition</th><th>A</th><th>B</th></tr></thead><tbody>${conditions}</tbody></table><p>Saved profiles compare complete recipes, including supports, quality, cooling, flow limits and machine constraints. The difference in total time cannot be attributed to printer speed alone.</p><p>Common-process mode uses A’s entire process on both printers, retaining each machine and calibrated filament. Filament and machine differences still matter. All printable project instances are arranged once on one common plate within the shared rectangular bed area. Meshes, copies, placement and object overrides then remain fixed for A, B and C. Embedded object settings can override a profile setting.</p><div class="actions"><button id="common-process">Use A’s process on both</button><button id="restore-process">Restore imported processes</button></div><table><thead><tr><th>Effective setting</th><th>A</th><th>B</th></tr></thead><tbody>${differences.join("")}</tbody></table>`,
   );
   const apply = () => {
     summaries = [undefined, undefined, undefined];
@@ -125,8 +133,11 @@ function conditionsDialog() {
     tuned = structuredClone(bundles[selected]);
     tunedDemo = isDemo[selected];
     clearTimeout(timer);
+    tuningDue = 0;
+    revisions.forEach((_, i) => revisions[i]++);
     $<HTMLDialogElement>("#modal").close();
     renderCompare();
+    if (model && connected) sliceAll();
   };
   $("#common-process").onclick = () => {
     if (isDemo.some(Boolean)) {
@@ -197,7 +208,7 @@ function rows(i: number) {
       const controls =
         s[0] === "enable_support"
           ? `<input id="number-enable_support" aria-label="Supports enabled" type="checkbox" data-key="enable_support" ${n ? "checked" : ""} ${n === null ? "disabled" : ""}><span>Enable supports</span>`
-          : `<input aria-label="${s[1]} slider" type="range" data-key="${s[0]}" min="${s[4]}" max="${s[5]}" step="${s[5] <= 1 ? 0.01 : 1}" value="${n ?? s[4]}" ${n === null ? "disabled" : ""}><input id="number-${s[0]}" aria-label="${s[1]} value" type="number" data-key="${s[0]}" min="${s[4]}" max="${s[5]}" step="${s[5] <= 1 ? 0.01 : 1}" value="${n ?? ""}" ${n === null ? "disabled" : ""}><span class="unit">${s[2]}</span>`;
+          : `<button class="nudge" data-adjust="${s[0]}:-1" aria-label="Decrease ${s[1]}" ${n === null || n <= s[4] ? "disabled" : ""}>−</button><input aria-label="${s[1]} slider" type="range" data-key="${s[0]}" min="${s[4]}" max="${s[5]}" step="${tuningStep(s)}" value="${n ?? s[4]}" ${n === null ? "disabled" : ""}><button class="nudge" data-adjust="${s[0]}:1" aria-label="Increase ${s[1]}" ${n === null || n >= s[5] ? "disabled" : ""}>+</button><input id="number-${s[0]}" aria-label="${s[1]} value" type="number" data-key="${s[0]}" min="${s[4]}" max="${s[5]}" step="${tuningStep(s)}" value="${n ?? ""}" ${n === null ? "disabled" : ""}><span class="unit">${s[2]}</span>`;
       return `<div class="setting-row ${diff ? "diff" : ""}"><span class="setting-icon">${s[3] === "filament" ? "♧" : "ϟ"}</span><label ${i === 2 ? `for="number-${s[0]}"` : ""} title="${s[0]}">${s[1]}${s[0] === "default_acceleration" ? '<small title="Zero delegates acceleration to firmware where supported; verify Klipper and slicer machine limits."> ⓘ</small>' : ""}</label>${i === 2 ? controls : `<strong>${escape(display(b, s))}</strong>`}</div>`;
     })
     .join("");
@@ -205,8 +216,16 @@ function rows(i: number) {
 function summary(i: number) {
   const s = summaries[i];
   const b = summaries[1 - selected];
-  const pct = s && b ? (s.seconds / b.seconds - 1) * 100 : undefined;
-  return `<div class="section-title"><h2><span>▥</span> ${i === 2 ? "Live Summary" : "Summary"}</h2>${i === 2 ? `<div><button class="small" id="export-project">Export 3MF</button>${s?.notes?.length ? `<button class="small" data-result-details="2">Scope</button>` : ""}<button class="small" id="reslice">↻ Re-slice</button></div>` : `<span class="chip">${s ? "OrcaSlicer result" : "Awaiting slice"}</span>`}</div><div class="time-metric"><span>◷ &nbsp; Estimated print time</span><div class="time-value"><strong>${duration(s?.seconds)}</strong>${s ? `<small>${s.seconds.toLocaleString()} s · exact engine estimate</small>` : ""}</div></div><div class="metric"><span>▤ &nbsp; Filament used</span><strong>${s?.grams === undefined ? "Not provided" : s.grams.toFixed(2) + " g"}</strong><small>${s?.meters === undefined ? "" : s.meters.toFixed(2) + " m"}</small></div><div class="metric"><span>♧ &nbsp; Support material</span><strong>Not separately provided</strong></div><div class="metric"><span>⌁ &nbsp; Travel / feature breakdown</span><strong>Not provided by engine</strong></div><div class="result-status ${states[i].includes("Stale") ? "stale" : ""}">${escape(states[i])}${pct === undefined ? "" : ` · ${pct > 0 ? "+" : ""}${pct.toFixed(1)}% vs target`}</div>${i === 2 ? `<div class="safety">Faster estimates do not establish safe hardware limits.</div><div class="actions"><button id="reset">↶ Reset</button><button id="save">♧ Save Preset</button><button id="install" class="primary">♙ Install in OrcaSlicer</button></div>` : `<button data-slice="${i}" class="slice">Slice ${i === 0 ? "current" : "target"} profile</button><small class="source">${s ? escape(s.source) + (s.objectCount ? ` · ${s.objectCount} objects` : "") + (s.notes?.length ? `<button class="small" data-result-details="${i}">Scope & limits</button>` : "") : "Real estimates appear after local slicing completes."}</small>`}`;
+  const pct =
+    s &&
+    b &&
+    states[i].startsWith("Verified") &&
+    states[1 - selected].startsWith("Verified") &&
+    s.modelHash === b.modelHash &&
+    s.layoutHash === b.layoutHash
+      ? (s.seconds / b.seconds - 1) * 100
+      : undefined;
+  return `<div class="section-title"><h2><span>▥</span> ${i === 2 ? "Live Summary" : "Summary"}</h2>${i === 2 ? `<div><button class="small" id="export-project">Export 3MF</button>${s?.notes?.length ? `<button class="small" data-result-details="2">Scope</button>` : ""}</div>` : `<span class="chip">${states[i].startsWith("Verified") ? "OrcaSlicer result" : s ? "Stale estimate" : "Awaiting slice"}</span>`}</div><div class="time-metric"><span>◷ &nbsp; Estimated print time</span><div class="time-value"><strong>${duration(s?.seconds)}</strong>${s ? `<small>${s.seconds.toLocaleString()} s · exact engine estimate</small>` : ""}</div></div><div class="metric"><span>▤ &nbsp; Filament used</span><strong>${s?.grams === undefined ? "Not provided" : s.grams.toFixed(2) + " g"}</strong><small>${s?.meters === undefined ? "" : s.meters.toFixed(2) + " m"}</small></div><div class="metric"><span>♧ &nbsp; Support material</span><strong>Not separately provided</strong></div><div class="metric"><span>⌁ &nbsp; Travel / feature breakdown</span><strong>Not provided by engine</strong></div><div class="result-status ${!states[i].startsWith("Verified") && s ? "stale" : ""}" role="status" aria-live="polite">${/recalculating|Slicing|Queued/.test(states[i]) ? `<progress aria-label="${i === 2 ? "Live tuning" : "Printer " + (i === 0 ? "A" : "B")} slicing progress"></progress>` : ""}${escape(states[i])}${pct === undefined ? "" : ` · ${pct > 0 ? "+" : ""}${pct.toFixed(1)}% vs target`}</div>${i === 2 ? `<div class="safety">Faster estimates do not establish safe hardware limits.</div><div class="actions"><button id="reset">↶ Reset</button><button id="save">♧ Save Preset</button><button id="install" class="primary">♙ Install in OrcaSlicer</button></div>` : `<small class="source">${s ? escape(s.source) + (s.objectCount ? ` · ${s.objectCount} objects` : "") + (s.notes?.length ? `<button class="small" data-result-details="${i}">Scope & limits</button>` : "") : "Real estimates appear after local slicing completes."}</small>`}`;
 }
 function bindResultDetails() {
   document
@@ -226,7 +245,7 @@ function renderCompare() {
   $("#compare").innerHTML = [0, 1, 2]
     .map(
       (i) =>
-        `<article class="column col-${i}"><div class="column-heading"><span>${i === 2 ? "☷" : "♙"}</span><div><h2>${["A — Current Printer", "B — Target Printer", "C — Live Tuning"][i]}</h2>${i === 2 ? `<small>Tune ${escape(bundles[selected].machine.name)} to match ${escape(bundles[1 - selected].machine.name)}</small>` : ""}</div></div>${profileInfo(i)}<section class="settings section"><div class="section-title"><h2><span>⚙</span> ${i === 2 ? "Live Adjustment Controls" : "Profile Settings"}</h2>${i === 2 ? '<button id="analyze" class="small">ϟ Analyze impact</button>' : `<span class="chip">${escape(bundles[i].process.layer_height || "—")} mm</span>`}</div><div class="settings-banner">ϟ ${i === 2 ? "Scroll linked across columns (synced scroll)" : "Speed-Affecting Settings (OrcaSlicer)"}<small>${i === 2 ? "Values require re-slicing" : "ⓘ Scroll linked across columns"}</small></div><div class="settings-scroll">${rows(i)}</div><div class="settings-foot">${i === 2 ? "Acceleration 0: firmware controlled where supported." : "Highlighted rows differ between profiles."}</div></section><section class="summary section" id="summary-${i}">${summary(i)}</section></article>`,
+        `<article class="column col-${i}"><div class="column-heading"><span>${i === 2 ? "☷" : "♙"}</span><div><h2>${["A — Current Printer", "B — Target Printer", "C — Live Tuning"][i]}</h2>${i === 2 ? `<small>Tune ${escape(bundles[selected].machine.name)} to match ${escape(bundles[1 - selected].machine.name)}</small>` : ""}</div></div>${profileInfo(i)}<section class="settings section"><div class="section-title"><h2><span>⚙</span> ${i === 2 ? "Live Adjustment Controls" : "Profile Settings"}</h2>${i === 2 ? '<button id="analyze" class="small">ϟ Analyze impact</button>' : `<span class="chip">${escape(bundles[i].process.layer_height || "—")} mm</span>`}</div><div class="settings-banner">ϟ ${i === 2 ? "Scroll linked across columns (synced scroll)" : "Speed-Affecting Settings (OrcaSlicer)"}<small>${i === 2 ? "Automatic local re-slicing" : "ⓘ Scroll linked across columns"}</small></div><div class="settings-scroll">${rows(i)}</div><div class="settings-foot">${i === 2 ? "Acceleration 0: firmware controlled where supported." : "Highlighted rows differ between profiles."}</div></section><section class="summary section" id="summary-${i}">${summary(i)}</section></article>`,
     )
     .join("");
   document.querySelectorAll<HTMLSelectElement>("[data-printer]").forEach(
@@ -294,56 +313,57 @@ function renderCompare() {
     .forEach(
       (el) => (el.onclick = () => importDialog(Number(el.dataset.import))),
     );
-  document
-    .querySelectorAll<HTMLButtonElement>("[data-slice]")
-    .forEach((el) => (el.onclick = () => void slice(Number(el.dataset.slice))));
   $("#modify").onchange = () => {
     selected = Number($<HTMLSelectElement>("#modify").value);
     tuned = structuredClone(bundles[selected]);
     tunedDemo = isDemo[selected];
     summaries[2] = undefined;
     states[2] = "Not sliced";
+    revisions[2]++;
+    clearTimeout(timer);
+    tuningDue = 0;
     renderCompare();
+    if (model && connected && !tunedDemo) slice(2);
   };
-  document.querySelectorAll<HTMLInputElement>("[data-key]").forEach((el) =>
-    el.addEventListener("input", () => {
-      if (el.type === "number" && el.value.trim() === "") return;
-      const value =
-        el.type === "checkbox" ? Number(el.checked) : Number(el.value);
-      try {
-        tuned = changed(tuned, el.dataset.key!, value);
-      } catch (e) {
-        notify(String(e));
-        return;
-      }
-      document
-        .querySelectorAll<HTMLInputElement>(`[data-key="${el.dataset.key}"]`)
-        .forEach((other) => {
-          if (other.type !== "checkbox") other.value = String(value);
-        });
-      states[2] = summaries[2]
-        ? "Stale · settings changed"
-        : "Pending · settings changed";
-      updateSummaries();
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        if (connected && model && !tunedDemo) void slice(2);
-        else {
-          states[2] =
-            "Pending · connect helper, import profiles and choose model";
-          updateSummaries();
-        }
-      }, 650);
-    }),
+  document.querySelectorAll<HTMLInputElement>("[data-key]").forEach((el) => {
+    el.oninput = () => {
+      if (el.type === "number" && !el.value.trim()) return;
+      applyTuning(
+        el.dataset.key!,
+        el.type === "checkbox" ? Number(el.checked) : Number(el.value),
+      );
+    };
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-adjust]").forEach(
+    (button) =>
+      (button.onclick = () => {
+        const [key, direction] = button.dataset.adjust!.split(":");
+        const setting = settings.find((s) => s[0] === key)!;
+        const value = numeric(tuned, setting);
+        if (value === null) return;
+        const next = Math.max(
+          setting[4],
+          Math.min(
+            setting[5],
+            Number(
+              (value + Number(direction) * tuningStep(setting)).toFixed(4),
+            ),
+          ),
+        );
+        applyTuning(key, next);
+      }),
   );
   $("#reset").onclick = () => {
     tuned = structuredClone(bundles[selected]);
     tunedDemo = isDemo[selected];
     summaries[2] = undefined;
     states[2] = "Not sliced";
+    revisions[2]++;
+    clearTimeout(timer);
+    tuningDue = 0;
     renderCompare();
+    if (model && connected && !tunedDemo) slice(2);
   };
-  $("#reslice").onclick = () => void slice(2);
   $("#export-project").onclick = () => void exportProject();
   bindResultDetails();
   $("#save").onclick = savePreset;
@@ -355,17 +375,17 @@ function updateSummaries() {
   [0, 1, 2].forEach((i) => {
     $(`#summary-${i}`).innerHTML = summary(i);
   });
-  document
-    .querySelectorAll<HTMLButtonElement>("[data-slice]")
-    .forEach((el) => (el.onclick = () => void slice(Number(el.dataset.slice))));
   $("#reset").onclick = () => {
     tuned = structuredClone(bundles[selected]);
     tunedDemo = isDemo[selected];
     summaries[2] = undefined;
     states[2] = "Not sliced";
+    revisions[2]++;
+    clearTimeout(timer);
+    tuningDue = 0;
     renderCompare();
+    if (model && connected && !tunedDemo) slice(2);
   };
-  $("#reslice").onclick = () => void slice(2);
   $("#export-project").onclick = () => void exportProject();
   bindResultDetails();
   $("#save").onclick = savePreset;
@@ -381,56 +401,167 @@ async function waitJob(id: string) {
   }
   throw new Error("Job polling timed out. Check the local helper.");
 }
-async function slice(i: number) {
-  if (!requireHelper()) return;
-  if (!model) {
-    notify("Choose a common model first.");
+function requestKey(bundle: Bundle) {
+  const sorted = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(sorted)
+      : value && typeof value === "object"
+        ? Object.fromEntries(
+            Object.entries(value)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([k, v]) => [k, sorted(v)]),
+          )
+        : value;
+  return modelRevision + ":" + model + ":" + JSON.stringify(sorted(bundle));
+}
+function applyTuning(key: string, value: number) {
+  const setting = settings.find((s) => s[0] === key)!;
+  try {
+    tuned = changed(tuned, key, value);
+  } catch (e) {
+    const input = $<HTMLInputElement>(`#number-${key}`);
+    if (input) input.value = String(numeric(tuned, setting) ?? "");
+    notify(String(e));
     return;
   }
+  revisions[2]++;
+  document
+    .querySelectorAll<HTMLInputElement>(`[data-key="${key}"]`)
+    .forEach((input) => {
+      if (input.type === "checkbox") input.checked = Boolean(value);
+      else input.value = String(value);
+    });
+  document
+    .querySelectorAll<HTMLButtonElement>(`[data-adjust^="${key}:"]`)
+    .forEach((button) => {
+      button.disabled = button.dataset.adjust!.endsWith(":-1")
+        ? value <= setting[4]
+        : value >= setting[5];
+    });
+  clearTimeout(timer);
+  tuningDue = Date.now() + 650;
+  states[2] = !model
+    ? "Model required — select a model to recalculate"
+    : !connected
+      ? "Helper disconnected — reconnect to recalculate"
+      : "Stale — recalculating" +
+        (sliceBusy ? " · latest changes queued" : " · waiting for adjustments");
+  updateSummaries();
+  timer = setTimeout(() => {
+    if (connected && model && !tunedDemo) slice(2);
+    else if (tunedDemo && model) {
+      states[2] = "Import complete real profiles to recalculate";
+      updateSummaries();
+    }
+  }, 650);
+}
+function slice(i: number) {
+  if (!model || !connected || (i === 2 ? tunedDemo : isDemo[i])) return;
+  const key = requestKey(i === 2 ? tuned : bundles[i]);
+  if (
+    activeSlice?.column === i &&
+    activeSlice.key === key &&
+    activeSlice.revision === revisions[i]
+  )
+    return;
+  pendingSlices.add(i);
+  states[i] = summaries[i]
+    ? "Stale — recalculating · queued"
+    : "Queued · waiting for local OrcaSlicer";
+  updateSummaries();
+  void runNextSlice();
+}
+function sliceAll() {
+  if (!requireHelper()) return;
+  if (!model) {
+    notify("Select the common model first.");
+    return;
+  }
+  if (isDemo.some(Boolean) || tunedDemo) {
+    notify("Select complete real profiles for A and B first.");
+    return;
+  }
+  tuningDue = 0;
+  clearTimeout(timer);
+  // The same existing helper worker handles every request. C reuses A/B when identical.
+  [0, 1, 2].forEach((i) => slice(i));
+}
+async function runNextSlice() {
+  if (sliceBusy || !model || !connected) return;
+  const i = [...pendingSlices].find((i) => i !== 2 || Date.now() >= tuningDue);
+  if (i === undefined) return;
+  pendingSlices.delete(i);
   if (i === 2 ? tunedDemo : isDemo[i]) {
-    notify(
-      "Import real machine, process and filament presets before slicing. Demo profiles are incomplete examples.",
-    );
+    void runNextSlice();
     return;
   }
   const b = structuredClone(i === 2 ? tuned : bundles[i]);
-  if (i === 2 && tuningBusy) {
-    tuningQueued = true;
-    states[2] = summaries[2]
-      ? "Stale · latest changes queued"
-      : "Pending · latest changes queued";
-    updateSummaries();
-    return;
-  }
-  if (i === 2) tuningBusy = true;
-  const selectedModel = model;
+  const revision = revisions[i],
+    epoch = modelRevision,
+    selectedModel = model,
+    key = requestKey(b);
   const matchesCurrent = () =>
     model === selectedModel &&
-    JSON.stringify(i === 2 ? tuned : bundles[i]) === JSON.stringify(b);
-  states[i] = summaries[i] ? "Stale · slicing…" : "Slicing…";
-  updateSummaries();
-  try {
-    const job = await helper.slice(b, model);
-    const result = await waitJob(job.id);
+    epoch === modelRevision &&
+    revisions[i] === revision &&
+    requestKey(i === 2 ? tuned : bundles[i]) === key;
+  const accept = (result: Summary, reused = false) => {
     if (!matchesCurrent()) return;
     summaries[i] = result;
-    states[i] = "Verified local slice · " + new Date().toLocaleTimeString();
+    states[i] =
+      "Verified local slice" +
+      (reused ? " · identical source result reused" : "") +
+      " · " +
+      new Date().toLocaleTimeString();
     updateSummaries();
-  } catch (e) {
-    if (!matchesCurrent()) return;
-    states[i] = (summaries[i] ? "Stale · " : "") + String(e);
-    updateSummaries();
-  } finally {
-    if (i === 2) {
-      tuningBusy = false;
-      if (tuningQueued) {
-        tuningQueued = false;
-        clearTimeout(timer);
-        void slice(2);
-      }
+  };
+  const cached = completedSlices.get(key);
+  if (cached) {
+    accept(cached, true);
+    void runNextSlice();
+    return;
+  }
+  sliceBusy = true;
+  activeSlice = { column: i, key, revision };
+  states[i] = summaries[i]
+    ? "Stale — recalculating · local slice running"
+    : "Slicing · local OrcaSlicer running";
+  updateSummaries();
+  try {
+    const job = await helper.slice(b, selectedModel);
+    const result = await waitJob(job.id);
+    if (epoch === modelRevision) {
+      if (
+        !result.layoutHash ||
+        (verifiedLayout && result.layoutHash !== verifiedLayout) ||
+        (verifiedModelHash && result.modelHash !== verifiedModelHash)
+      )
+        throw new Error(
+          "Common layout changed. Select the model again before comparing these results.",
+        );
+      verifiedLayout = result.layoutHash;
+      verifiedModelHash = result.modelHash;
+      if (completedSlices.size >= 128)
+        completedSlices.delete(completedSlices.keys().next().value!);
+      completedSlices.set(key, result);
     }
+    accept(result);
+  } catch (e) {
+    if (matchesCurrent()) {
+      summaries[i] = undefined;
+      states[i] =
+        "Slice failed — " +
+        (e instanceof Error ? e.message : String(e)) +
+        " Use Slice All to retry.";
+      updateSummaries();
+    }
+  } finally {
+    sliceBusy = false;
+    activeSlice = undefined;
+    void runNextSlice();
   }
 }
+
 function importDialog(i: number) {
   modal(
     `<h2>Import ${i === 0 ? "current" : "target"} profiles</h2><p>One local approval imports configured printers and compatible saved presets. Subsequent sessions restore this library automatically.</p><div class="actions"><button id="manual-import">Import JSON files</button><button id="local-import">Read local Orca profiles</button><button id="portable-import">Choose portable folder</button></div><details><summary>Advanced / Browse All Profiles</summary><p>Installed system catalog includes unconfigured printers and incompatible presets. Select deliberately; this view does not establish compatibility.</p><button id="browse-all">Load full installed catalog</button><p>${escape(library?.note || "")}</p></details><div id="selectors"></div>`,
@@ -455,6 +586,8 @@ function importDialog(i: number) {
             inherits: "",
           };
         }
+        revisions[i]++;
+        if (i === selected) revisions[2]++;
         bundles[i] = bundle;
         importedProcesses[i] = structuredClone(bundle.process);
         isDemo[i] = false;
@@ -471,6 +604,10 @@ function importDialog(i: number) {
           : "Imported effective profiles · choose a common model for verified estimates.";
         $<HTMLDialogElement>("#modal").close();
         renderCompare();
+        if (model && connected) {
+          slice(i);
+          if (i === selected) slice(2);
+        }
       } catch (e) {
         notify(String(e));
       }
@@ -537,6 +674,11 @@ function importDialog(i: number) {
   if (catalog.length && !library?.imported) choose();
 }
 function useBundle(i: number, bundle: Bundle, incomplete = false) {
+  revisions[i]++;
+  if (i === selected) {
+    revisions[2]++;
+    tuningDue = 0;
+  }
   bundles[i] = structuredClone(bundle);
   importedProcesses[i] = structuredClone(bundle.process);
   isDemo[i] = incomplete;
@@ -565,6 +707,10 @@ function useBundle(i: number, bundle: Bundle, incomplete = false) {
   $("#notice").textContent =
     "Saved local profiles · select a common model for verified estimates.";
   renderCompare();
+  if (model && connected && !incomplete) {
+    slice(i);
+    if (i === selected) slice(2);
+  }
 }
 function acceptLibrary(result: Library) {
   if (!result.printers) return;
@@ -603,9 +749,11 @@ async function refreshLibrary(announce = true) {
   refreshBusy = true;
   try {
     const result = await helper.call<Library>("/profiles", {});
+    const changed = JSON.stringify(library) !== JSON.stringify(result);
     acceptLibrary(result);
     await restoreLibrary();
-    renderCompare();
+    if (changed && !document.activeElement?.matches("[data-key],[data-adjust]"))
+      renderCompare();
     if (announce)
       notify(
         "Refreshed from OrcaSlicer. Existing comparison and experiment snapshots retained; select a profile again to use changed settings.",
@@ -703,6 +851,9 @@ async function install() {
       $<HTMLDialogElement>("#modal").close();
       if (JSON.stringify(tuned) === JSON.stringify(installing)) {
         tuned = result.bundle;
+        revisions[2]++;
+        tuningDue = 0;
+        clearTimeout(timer);
         states[2] = "Stale · verifying installed preset names";
         renderCompare();
         void slice(2);
@@ -781,6 +932,9 @@ function analysisDialog() {
           const kind = settings.find((s) => s[0] === e.key)![3];
           tuned[kind][e.key] = structuredClone(analysisTarget[kind][e.key]);
         }
+        revisions[2]++;
+        tuningDue = 0;
+        clearTimeout(timer);
         states[2] = "Stale · analyzed changes applied";
         $<HTMLDialogElement>("#modal").close();
         renderCompare();
@@ -835,9 +989,13 @@ function renderPresets() {
         tuned = structuredClone(all[Number(e.dataset.load)].bundle);
         tunedDemo = all[Number(e.dataset.load)].demo ?? true;
         summaries[2] = undefined;
+        revisions[2]++;
+        tuningDue = 0;
+        clearTimeout(timer);
         states[2] = "Loaded experiment · re-slice required";
         navigate("Compare & Tune");
         renderCompare();
+        if (model && connected && !tunedDemo) slice(2);
       }),
   );
   document.querySelectorAll<HTMLElement>("[data-export]").forEach(
@@ -935,9 +1093,11 @@ function setConnected(value: boolean) {
   $("#connection-dot").classList.toggle("online", value);
 }
 async function connect() {
-  const health = await helper.call<{ orcaFound: boolean; instance?: string }>(
-    "/health",
-  );
+  const health = await helper.call<{
+    orcaFound: boolean;
+    instance?: string;
+    sharedLayout?: boolean;
+  }>("/health");
   if (
     helperInstance &&
     health.instance &&
@@ -945,6 +1105,13 @@ async function connect() {
     model
   ) {
     model = "";
+    modelRevision++;
+    verifiedLayout = undefined;
+    verifiedModelHash = undefined;
+    pendingSlices.clear();
+    completedSlices.clear();
+    clearTimeout(timer);
+    $<HTMLButtonElement>("#slice-all").hidden = true;
     modelName = "Helper restarted · select the common model again";
     $("#model-name").textContent = modelName;
     states = states.map((_, i) =>
@@ -952,6 +1119,7 @@ async function connect() {
     );
     updateSummaries();
   }
+  sharedLayoutSupported = Boolean(health.sharedLayout);
   helperInstance = health.instance || "";
   const wasConnected = connected;
   setConnected(true);
@@ -1098,18 +1266,47 @@ document
   .forEach((e) => (e.onclick = () => navigate(e.dataset.nav!)));
 $("#connection").onclick = () => navigate("Settings");
 $("#help").onclick = () => navigate("Settings");
+$("#slice-all").onclick = sliceAll;
 $("#choose-model").onclick = async () => {
   if (!requireHelper()) return;
+  if (isDemo.some(Boolean) || tunedDemo) {
+    notify(
+      "Select real printer, process and filament profiles in both columns first.",
+    );
+    return;
+  }
+  if (!sharedLayoutSupported) {
+    notify(
+      "Update the tray helper to v0.3.0 for a shared project arrangement.",
+    );
+    return;
+  }
+  $<HTMLButtonElement>("#choose-model").disabled = true;
   try {
-    const r = await helper.call<{ id: string; name: string }>("/model", {});
+    const r = await helper.call<{ id: string; name: string }>("/model", {
+      bundles: [bundles[0], bundles[1], tuned],
+    });
     model = r.id;
     modelName = r.name;
-    summaries = [undefined, undefined, undefined];
-    states = ["Not sliced", "Not sliced", "Not sliced"];
+    modelRevision++;
+    verifiedLayout = undefined;
+    verifiedModelHash = undefined;
+    revisions.forEach((_, i) => revisions[i]++);
+    pendingSlices.clear();
+    completedSlices.clear();
+    clearTimeout(timer);
+    tuningDue = 0;
+    states = states.map((_, i) =>
+      summaries[i] ? "Stale — common model changed" : "Not sliced",
+    );
     $("#model-name").textContent = modelName;
+    $<HTMLButtonElement>("#slice-all").hidden = false;
     updateSummaries();
+    sliceAll();
   } catch (e) {
     notify(String(e));
+  } finally {
+    $<HTMLButtonElement>("#choose-model").disabled = false;
   }
 };
 renderCompare();

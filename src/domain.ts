@@ -10,9 +10,15 @@ export type Summary = {
   settingsHash: string;
   notes?: string[];
   objectCount?: number;
+  layoutHash?: string;
+  projectObjectCount?: number;
   exportedProject?: string;
   breakdown?: Record<string, number>;
 };
+export function tuningStep(setting: (typeof settings)[number]) {
+  if (setting[0] === "layer_height" || setting[0] === "line_width") return 0.01;
+  return setting[0] === "filament_max_volumetric_speed" ? 0.1 : 1;
+}
 export const settings = [
   ["outer_wall_speed", "Outer wall speed", "mm/s", "process", 1, 600],
   ["inner_wall_speed", "Inner wall speed", "mm/s", "process", 1, 800],

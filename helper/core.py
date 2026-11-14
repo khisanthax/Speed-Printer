@@ -14,6 +14,7 @@ import time
 import zipfile
 import xml.etree.ElementTree as ET
 from opc import read_opc
+from shared_model import SharedModel, layout_signature
 
 KINDS = ('machine', 'process', 'filament')
 RANGES = {
@@ -215,9 +216,38 @@ class Engine:
         self.cache = {}
         self.validated = {}
 
+    def freeze_layout(self, model, bundle):
+        if model.signature: return
+        # Preparation is arrangement/export only, not a second time estimator.
+        root=Path(model.directory.name)
+        layout_bundle=copy.deepcopy(bundle)
+        layout_bundle['machine']['printable_area']=model.area
+        raw,model.notes=prepare_model(model.original.read_bytes(),model.original.suffix,layout_bundle)
+        (root/('input'+model.original.suffix)).write_bytes(raw)
+        for kind,preset in layout_bundle.items():
+            (root/f'{kind}.json').write_text(json.dumps({k:v for k,v in preset.items() if not k.startswith('__sp_')}),encoding='utf-8')
+        command=[self.executable,str(root/('input'+model.original.suffix)),'--load-settings',f'{root / "machine.json"};{root / "process.json"}',
+                 '--load-filaments',str(root/'filament.json'),'--arrange','1','--outputdir',str(root),'--export-3mf','common.3mf']
+        run=subprocess.run(command,cwd=root,capture_output=True,timeout=300,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        if run.returncode or not model.layout.is_file():
+            raise ValueError('Orca could not prepare one common arrangement. Check that all project parts fit on the shared printable area.')
+        inspect_model(model.layout)
+        signature,count=layout_signature(model.layout.read_bytes())
+        expected=layout_signature(model.original.read_bytes())[1] if model.original.suffix=='.3mf' else 1
+        if count!=expected:
+            raise ValueError('Orca changed the number of printable instances while preparing the common plate. Review the source project in Orca.')
+        with zipfile.ZipFile(model.layout) as archive:
+            plates=ET.fromstring(archive.read('Metadata/model_settings.config')).findall('plate')
+            occupied=[p for p in plates if p.findall('model_instance')]
+            if len(occupied)!=1:
+                raise ValueError('The selected parts need more than one common plate. Save a single-plate comparison project in Orca first.')
+        model.signature=signature;model.object_count=count
+
     def slice(self, bundle, model, export_path=None):
         bundle = flatten(bundle, self.catalog)
-        path = inspect_model(model)
+        shared=model if isinstance(model,SharedModel) else None
+        if shared: self.freeze_layout(shared,bundle)
+        path = inspect_model(shared.original if shared else model)
         model_bytes = path.read_bytes()
         model_hash = hashlib.sha256(model_bytes).hexdigest()
         settings_hash = digest(bundle)
@@ -226,13 +256,15 @@ class Engine:
         if dll.is_file():
             engine_files.append(dll)
         fingerprint = digest([(f.name, f.stat().st_mtime_ns, f.stat().st_size) for f in engine_files])
-        key = digest(['snapshot-v2', model_hash, settings_hash, self.executable, fingerprint])
+        key = digest(['snapshot-v3', model_hash, shared.signature if shared else None, settings_hash, self.executable, fingerprint])
         if key in self.cache and export_path is None:
             return self.cache[key]
         with tempfile.TemporaryDirectory(prefix='speed-printer-') as temp:
             work = Path(temp)
-            snapshot = work / ('model' + path.suffix.lower())
-            prepared, notes = prepare_model(model_bytes, path.suffix.lower(), bundle)
+            snapshot = work / ('model.3mf' if shared else 'model' + path.suffix.lower())
+            prepared, notes = prepare_model(shared.slice_input(bundle) if shared else model_bytes, '.3mf' if shared else path.suffix.lower(), bundle)
+            if shared:
+                notes=[n for n in shared.notes if not n.startswith('Complete project:')]+['Common project: all printable instances arranged once on one shared plate; identical meshes, copies, placement and object overrides are used for A, B and C.']
             def scalar(preset, key):
                 value = preset.get(key)
                 if isinstance(value, list):
@@ -252,7 +284,7 @@ class Engine:
             output = work / 'output'
             output.mkdir()
             command = [self.executable, str(snapshot), '--load-settings', f'{work / "machine.json"};{work / "process.json"}',
-                       '--load-filaments', str(work / 'filament.json'), '--arrange', '1', '--slice', '0',
+                       '--load-filaments', str(work / 'filament.json'), '--arrange', '0' if shared else '1', '--slice', '0',
                        '--outputdir', str(output), '--export-3mf', 'sliced.3mf']
             run = subprocess.run(command, cwd=work, capture_output=True, timeout=300,
                                  creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -264,6 +296,10 @@ class Engine:
                 raise ValueError(f'OrcaSlicer failed (exit {run.returncode}).{detail} Review the selected profiles and project in OrcaSlicer.')
             if b'Not precalculated Placeable areas' in run.stdout + run.stderr:
                 notes.append('Orca reported support-placement warnings. Review supports and toolpaths in Orca before printing; a completed slice does not certify support quality.')
+            if shared:
+                produced=output/'sliced.3mf'
+                if not produced.is_file() or layout_signature(produced.read_bytes())!=(shared.signature,shared.object_count):
+                    raise ValueError('Orca changed the common geometry, placement or object overrides. This result is not a verified shared-layout comparison; review the project in Orca.')
             texts = [f.read_text(encoding='utf-8', errors='replace') for f in output.rglob('*.gcode')]
             if not texts:
                 for f in output.rglob('*.3mf'):
@@ -277,6 +313,8 @@ class Engine:
             result = {**summaries[0], 'modelHash': model_hash, 'settingsHash': settings_hash,
                       'engine': Path(self.executable).name, 'engineFingerprint': fingerprint, 'verifiedAt': time.time(),
                       'notes': notes, 'objectCount': sum(len(re.findall(r'^EXCLUDE_OBJECT_DEFINE\b', t, re.M)) for t in texts)}
+            if shared:
+                result.update(layoutHash=shared.signature,projectObjectCount=shared.object_count)
             if export_path is not None:
                 project = output / 'sliced.3mf'
                 if not project.is_file():
