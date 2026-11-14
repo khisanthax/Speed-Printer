@@ -1112,6 +1112,8 @@ function setConnected(value: boolean) {
     ? "Local helper connected"
     : helper.connectionStatus;
   $("#connection-dot").classList.toggle("online", value);
+  const status = document.querySelector("#pair-status");
+  if (status) status.textContent = value ? "Connected · browser trust remembered" : helper.connectionStatus;
 }
 let connecting: Promise<void> | undefined;
 function connect() {
