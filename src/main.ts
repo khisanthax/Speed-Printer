@@ -507,10 +507,24 @@ async function runNextSlice() {
     requestKey(i === 2 ? tuned : bundles[i]) === key;
   const accept = (result: Summary, reused = false) => {
     if (!matchesCurrent()) return;
+    const previous = summaries[i];
+    const delta =
+      i === 2 &&
+      previous?.modelHash === result.modelHash &&
+      previous.layoutHash === result.layoutHash
+        ? result.seconds - previous.seconds
+        : undefined;
+    const change =
+      delta === undefined
+        ? ""
+        : delta === 0
+          ? " · estimate unchanged for this model"
+          : ` · ${Math.abs(delta).toLocaleString()} s ${delta < 0 ? "faster" : "slower"} than last C result`;
     summaries[i] = result;
     states[i] =
       "Verified local slice" +
       (reused ? " · identical source result reused" : "") +
+      change +
       " · " +
       new Date().toLocaleTimeString();
     updateSummaries();

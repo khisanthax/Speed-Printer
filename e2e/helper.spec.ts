@@ -96,13 +96,11 @@ async function setup(page: Page) {
       b[kind].name = `${i ? "Target" : "Fixture"} ${kind}`;
     await page.locator(`[data-import="${i}"]`).click();
     await page.locator("#manual-import").click();
-    await page
-      .locator("#file")
-      .setInputFiles({
-        name: "fixtures.json",
-        mimeType: "application/json",
-        buffer: Buffer.from(JSON.stringify(Object.values(b))),
-      });
+    await page.locator("#file").setInputFiles({
+      name: "fixtures.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(JSON.stringify(Object.values(b))),
+    });
     for (const kind of ["machine", "process", "filament"])
       await page
         .locator(`#pick-${kind}`)
@@ -178,6 +176,7 @@ test("one model selection slices A and B and reuses identical C; numeric buttons
     page.locator("#number-filament_max_volumetric_speed"),
   ).toHaveValue("24.1");
   await s.verified();
+  await expect(page.locator("#summary-2")).toContainText("estimate unchanged");
   await page.locator("#number-layer_height").fill("0.05");
   await expect(
     page.getByRole("button", { name: "Decrease Layer height", exact: true }),

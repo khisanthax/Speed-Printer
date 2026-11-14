@@ -48,6 +48,8 @@ If the helper is unavailable, import exported JSON manually, tune, save, then ex
 
 ## One shared project
 
+After each completed C recalculation, the status reports either the exact measured seconds faster/slower than its preceding result on that same project/layout, or **estimate unchanged for this model**. An unchanged rounded hour/minute display therefore does not imply that the automatic slice failed.
+
 Version 0.3.0 of the helper is required for the new unified workflow. Existing pairing and the local profile library survive the upgrade; model handles and install validation remain session-local. Exit the older helper, run the new EXE, and open the updated website. A previously trusted browser reconnects automatically. Check the sidebar: the helper must be running for real estimates.
 
 All printable instances in the selected file are included, with their quantities, object/part overrides and applicable project conditions. Orca prepares one arrangement on one common rectangular plate that fits the intersection of the selected printers' bed rectangles. Original multi-plate placement is not retained. That one arrangement is then fixed for A, B and C, with per-printer auto-arrange disabled. Exported geometry, world-space placement, instance counts, plate membership and object/part overrides are checked; a changed layout is rejected rather than compared. Each printer keeps its actual machine limits and calibrated profile settings. Embedded object overrides can make a slider have little or no effect; a completed estimate is measured, not a promise of a speedup.
