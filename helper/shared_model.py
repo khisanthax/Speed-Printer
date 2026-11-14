@@ -69,7 +69,7 @@ def layout_signature(data):
                     parts=[]
                     for part in [obj,*obj.findall('part')]:
                         values=sorted((m.get('key'),m.get('value')) for m in part.findall('metadata')
-                                      if m.get('key') not in ('name','matrix') and not m.get('key','').startswith('source_'))
+                                      if m.get('key') and m.get('key') not in ('name','matrix') and not m.get('key','').startswith('source_'))
                         parts.append([part.tag,part.get('id'),values,part.get('subtype')])
                     objects.append(parts)
                 objects.sort(key=lambda parts:int(parts[0][1]))

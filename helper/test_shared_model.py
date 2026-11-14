@@ -26,6 +26,16 @@ def bundle(name='A',size=100):
 class SharedModelTests(unittest.TestCase):
     def test_signature_tracks_geometry_copies_placement_and_object_conditions(self):
         original=layout_signature(project())
+        # Original Orca projects also contain unnamed mesh statistics, e.g.
+        # <metadata face_count="3312"/>, alongside keyed print overrides.
+        out=io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(project())) as source,zipfile.ZipFile(out,'w') as dest:
+            for name in source.namelist():
+                raw=source.read(name)
+                if name=='Metadata/model_settings.config':
+                    raw=raw.replace(b'<part id="1">',b'<part id="1"><metadata face_count="3312"/>')
+                dest.writestr(name,raw)
+        self.assertEqual(original,layout_signature(out.getvalue()))
         self.assertEqual(original,layout_signature(project(uuid='changed serialization UUID')))
         self.assertNotEqual(original,layout_signature(project(copies=2)))
         self.assertNotEqual(original,layout_signature(project(walls='4')))
